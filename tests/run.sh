@@ -193,6 +193,86 @@ section "dispatcher — unknown verbs are refused"
 refuses "unknown command is refused" "unknown command"      -- frobnicate
 refuses "unknown seat subcommand is refused" "unknown 'seat' subcommand" -- seat frobnicate
 
+section "fleet — the distinction a process count cannot make"
+# ⛔ THE DEFECT UNDER TEST: a poller is DOWN both when a seat is mid-turn reading
+#    its mail (normal — do not nudge) and when it was killed (needs a human).
+#    `ps` cannot tell those apart. The exit record can, and these four arms prove
+#    it does — including the two that must NOT alarm, because an instrument that
+#    alarms on everything is as useless as one that alarms on nothing.
+_hb() {  # _hb <seat> <key=value>…
+  local seat="$1"; shift
+  mkdir -p "$AIMAIL_ROOT/state/poller"
+  : > "$AIMAIL_ROOT/state/poller/$seat.hb"
+  local kv; for kv in "$@"; do
+    printf '%s\t%s\n' "${kv%%=*}" "${kv#*=}" >> "$AIMAIL_ROOT/state/poller/$seat.hb"
+  done
+}
+_fleet_says() {  # _fleet_says <seat> <expected-state> <desc>
+  "$AIMAIL" fleet "$1" > "$AIMAIL_ROOT/.out" 2>&1
+  if grep -qE "^$1 +$2" "$AIMAIL_ROOT/.out"; then
+    PASS=$((PASS+1)); printf '  ✔ %s\n' "$3"
+  else
+    FAIL=$((FAIL+1)); FAILURES+=("$3")
+    printf '  ✖ %s — got: %s\n' "$3" "$(grep -E "^$1 " "$AIMAIL_ROOT/.out" | head -1)"
+  fi
+}
+NOW=$(date +%s)
+# ① the seat fired and is reading its mail — the false alarm we are killing
+_hb main pid=999999 started=$((NOW-600)) beat=$((NOW-10)) exit_at=$((NOW-5)) exit_reason=mail
+_fleet_says main "RE-ARMING" "a poller that exited delivering mail reads as RE-ARMING, not down"
+# ③ the other direction — the SAME absent process, but killed, must still alarm
+_hb main pid=999999 started=$((NOW-600)) beat=$((NOW-600))
+_fleet_says main "CRASHED"   "no exit record + no process reads as CRASHED"
+# ② positive control: a live, beating poller
+_hb main pid=$$ started=$((NOW-600)) beat=$NOW
+_fleet_says main "ARMED"     "a live beating poller reads as ARMED"
+# and the grace boundary must actually expire, or RE-ARMING would mask a stall
+_hb main pid=999999 started=$((NOW-9000)) beat=$((NOW-9000)) exit_at=$((NOW-9000)) exit_reason=mail
+_fleet_says main "STALLED"   "an exit older than the grace window reads as STALLED"
+rm -f "$AIMAIL_ROOT/state/poller/main.hb"
+
+section "migrate — import without touching the source"
+SRC="$AIMAIL_ROOT/oldbox"
+mkdir -p "$SRC/legacy/archive"
+printf 'old mail\n' > "$SRC/legacy/archive/2026-01-01-old.md"
+printf 'unread\n'   > "$SRC/legacy/live.md"
+printf 'role doc\n' > "$SRC/legacy/ROLE.md"
+accepts "migrate --dry-run writes nothing"     -- migrate "$SRC" --dry-run
+if [[ ! -d "$AIMAIL_ROOT/mail/legacy" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ dry run created no mail directory\n'
+else FAIL=$((FAIL+1)); FAILURES+=("dry run wrote to the target"); printf '  ✖ dry run wrote to the target\n'; fi
+accepts "migrate imports"                      -- migrate "$SRC"
+ARCH=$(find "$AIMAIL_ROOT/mail/legacy/archive" -name '*.md' 2>/dev/null | wc -l)
+LIVE=$(find "$AIMAIL_ROOT/mail/legacy" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+ROLE=$([[ -f "$AIMAIL_ROOT/roles/legacy.md" ]] && echo 1 || echo 0)
+if (( ARCH == 1 && LIVE == 1 && ROLE == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ archive→shard, inbox→inbox, ROLE.md→roles/ (%s/%s/%s)\n' "$ARCH" "$LIVE" "$ROLE"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("migrate routed files wrong: arch=$ARCH live=$LIVE role=$ROLE")
+  printf '  ✖ migrate routed files wrong: arch=%s live=%s role=%s\n' "$ARCH" "$LIVE" "$ROLE"
+fi
+# ⛔ ROLE.md must NOT land in the inbox, or it is delivered forever as mail.
+if [[ ! -f "$AIMAIL_ROOT/mail/legacy/ROLE.md" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ ROLE.md did not land in the inbox\n'
+else FAIL=$((FAIL+1)); FAILURES+=("ROLE.md landed in the inbox"); printf '  ✖ ROLE.md landed in the inbox\n'; fi
+SRC_COUNT=$(find "$SRC" -name '*.md' | wc -l)
+if (( SRC_COUNT == 3 )); then
+  PASS=$((PASS+1)); printf '  ✔ source untouched (%s files still there)\n' "$SRC_COUNT"
+else FAIL=$((FAIL+1)); FAILURES+=("migrate modified the source"); printf '  ✖ migrate modified the source\n'; fi
+accepts "migrate is idempotent (re-run is safe)" -- migrate "$SRC"
+
+section "stop hook — five arms, each asserting its logged DECISION"
+# ⚠ Run as part of the suite, not as a separate manual step. The first version of
+#   this selftest lived outside the suite, and its two "allow" arms passed while
+#   the guard was switched off entirely.
+SG="$(bash "$REPO/hooks/stop_guard.sh" selftest 2>&1)"
+while IFS= read -r line; do
+  case "$line" in
+    *"✔"*) PASS=$((PASS+1)); printf '  %s\n' "$line" ;;
+    *FAILED*) FAIL=$((FAIL+1)); FAILURES+=("stop_guard: $line"); printf '  ✖ %s\n' "$line" ;;
+  esac
+done <<< "$SG"
+
 section "doctor"
 accepts "doctor runs"                          -- doctor
 

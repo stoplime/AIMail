@@ -62,6 +62,21 @@ poller_run() {
   local maxb="${POLLER_DRAIN_MAXB:-60000}"
   mkdir -p "$MAIL_DIR/$seat/unacked"
 
+  # ⭐⭐ THE HEARTBEAT, AND WHY IT RECORDS A *REASON*: finished, killed and
+  #    crashed all leave identical evidence — no process. A supervisor sampling
+  #    `ps` therefore cannot tell a poller that DID ITS JOB from one that was
+  #    killed, and the predecessor reported the second as the first for 25
+  #    minutes while a seat sat unreachable.
+  # ⇒ Every deliberate exit below writes `exit_reason`. An absent exit record
+  #   with no live process is then a POSITIVE finding — it means the poller did
+  #   not stop on purpose — instead of an ambiguity. A completed run must leave
+  #   a verdict artifact, not merely stop.
+  source "$AIMAIL_LIB/fleet.sh"
+  hb_start "$seat"
+  # Covers the paths a trap can see. SIGKILL is deliberately NOT trappable, and
+  # that is exactly the case the missing-exit-record rule is designed to catch.
+  trap 'hb_exit "$seat" signal; exit 143' INT TERM
+
   echo "$(instrument_id) — polling '$seat' every ${interval}s"
   echo "state: $AIMAIL_ROOT"
 
@@ -88,7 +103,7 @@ poller_run() {
         echo "WAKE=ramp: the parked window ended at $(date -d "@$rat" '+%F %H:%M')."
         echo "  ⚠ This is a CONDITION, not a permission. It reports that a window rolled;"
         echo "    it cannot see a weekly cap or a human-imposed hold, and it does not lift one."
-        _rearm_notice "$seat"; return 0
+        hb_exit "$seat" ramp; _rearm_notice "$seat"; return 0
       fi
     fi
 
@@ -99,10 +114,15 @@ poller_run() {
     if (( pending > 0 )); then
       echo "WAKE=mail: $pending message(s) for '$seat'."
       mail_deliver "$seat" "$maxb"
+      # ⇒ `reason=mail` is what turns this exit from "the poller is gone" into
+      #   "the poller fired and the seat is now reading". `aimail fleet` reads it
+      #   and reports RE-ARMING rather than DOWN for the whole grace window.
+      hb_exit "$seat" mail
       _rearm_notice "$seat"
       return 0
     fi
 
+    hb_beat "$seat"
     sleep "$interval"
   done
 }

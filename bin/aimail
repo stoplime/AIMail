@@ -45,9 +45,19 @@ POLLING
   aimail poll <seat>                        arm the wake loop (run in background)
   aimail deliver <seat>                     deliver once, no loop (for testing)
 
+FLEET — who is working, who is reachable, who needs a human
+  aimail fleet [seat…]                      the dashboard, with a VERDICT per seat
+  aimail who                                alias for fleet
+
+⚠ A poller being down does NOT mean a seat is down. Between a poller firing and
+  the seat re-arming, the seat is READING ITS MAIL. `fleet` reports that as
+  RE-ARMING, not DOWN, for AIMAIL_REARM_GRACE seconds. Only CRASHED — no exit
+  record at all — means a human is needed.
+
 STATUS
   aimail status [seat]                      queues, un-acked, registry health
   aimail doctor                             check this installation
+  aimail migrate <old-mailbox> [--dry-run]  import an existing mailbox
   aimail version
 
 ⚠ There is no --body string argument and no --date argument, deliberately.
@@ -81,6 +91,10 @@ case "$cmd" in
 
   poll)    [[ $# -ge 1 ]] || refused "usage: aimail poll <seat>"
            source "$_SELF/../lib/poller.sh"; poller_run "$@" ;;
+
+  fleet|who)
+           source "$_SELF/../lib/fleet.sh"; fleet_report "$@" ;;
+  migrate) source "$_SELF/../lib/migrate.sh"; migrate_run "$@" ;;
 
   status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
   doctor)  source "$_SELF/../lib/status.sh"; doctor ;;

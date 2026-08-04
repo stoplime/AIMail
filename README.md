@@ -82,23 +82,92 @@ plausible number*: a 384% projection, a 0.00%/hour burn rate read as "fleet idle
 poke it", a census printing "0 of 0" as an all-clear. **"Unmeasurable" and "zero"
 are different claims, and zero reads as safe in whichever direction is dangerous.**
 
+## The fleet dashboard
+
+```
+aimail fleet
+```
+
+```
+SEAT             POLLER      LAST-STOP  QUEUED  UNACK  VERDICT
+main             RE-ARMING   2m              0      1  WORKING — mid-turn, reading mail. ⛔ DO NOT NUDGE
+review           ARMED       14m             2      0  IDLE & REACHABLE — mail will wake it, send work
+backend          CRASHED     51m             0      3  ⛔ UNREACHABLE — killed, not finished. Only a human can restart it
+```
+
+**The distinction this exists for:** a poller is down both when a seat is
+mid-turn reading its mail and when it was killed. Those demand opposite
+responses, and a process sample cannot tell them apart — which produced both
+failure directions repeatedly: redundant nudges, and a seat sitting unreachable
+for ~25 minutes.
+
+Two event sources, neither of which is a `pgrep`:
+
+- **The poller's heartbeat records why it stopped.** An exit that says
+  `reason=mail` is a poller that did its job. An absent heartbeat with *no exit
+  record* is a poller that was killed. Finished, killed and crashed otherwise
+  leave identical evidence — no process — so the finishing path has to write
+  something the other two cannot.
+- **The stop hook logs the moment a session ends a turn**, which is what "idle"
+  actually means. A process sample can never answer "when did this last stop".
+
+Six states where a process count had two: `ARMED`, `RE-ARMING`, `STALLED`,
+`WEDGED`, `CRASHED`, `NEVER`. `AIMAIL_REARM_GRACE` (default 180s) names the
+window in which a fired poller is still expected to re-arm — reporting that
+window as "down" is the most common false alarm in fleet supervision.
+
+## Migrating an existing mailbox
+
+```bash
+aimail migrate /path/to/old/mailbox --dry-run   # always first
+aimail migrate /path/to/old/mailbox
+```
+
+Copies — never moves. The source stays intact and running, the import is
+idempotent and resumable, archives are re-sharded by each message's **write**
+mtime so the chronology survives, and `ROLE.md` moves out of the inbox to
+`$AIMAIL_ROOT/roles/` so it can never be delivered as mail.
+
 ## Testing
 
 ```bash
-bash tests/run.sh
+bash tests/run.sh                    # 51 tests
+bash hooks/stop_guard.sh selftest    # 5 arms, also run by the suite
 ```
 
-35 tests. Every guard is exercised with an input that must trip it (①), paired
-with a positive control on the nearest valid input so an always-refusing guard
-cannot hide (③), and the suite has been mutation-tested — disabling any of three
-guards turns it red, and it returns green when restored.
+Every guard is exercised with an input that must trip it (①), paired with a
+positive control on the nearest valid input so an always-refusing guard cannot
+hide (③).
+
+Mutation-verified: disabling the fence guard, the ack gate, the broadcast-pronoun
+guard, the crashed/re-arming distinction, or the exit-record branch each turns the
+suite red, and it returns green when restored.
+
+⚠ One of those mutations initially reported a false all-clear, because the `sed`
+meant to apply it silently did not match. **A decoy that cannot apply its patch
+proves nothing** — assert the patch landed before drawing any conclusion from the
+result. The same shape appeared in the stop-hook selftest, where two "allow" arms
+passed while the guard was switched off entirely.
 
 ## Status
 
-**Ported and tested:** registry, send, delivery state machine, ack, archive
-sharding, `where`, poller, doctor, test harness.
+Measured against the toolset it replaces:
 
-**Not yet ported:** the gate slot (`gate_slot.sh`/`gate.sh`), `preland.sh`, the
-stop-hook liveness guard, and the budget/throttle/ramp layer. See
-[docs/PORTING.md](docs/PORTING.md) for what each needs and the defects each must
-not reintroduce.
+| Predecessor tool | Status |
+|---|---|
+| `poller.sh` + 7 per-seat wrappers | ✅ one `aimail poll <seat>`, plus the ack gate and heartbeat |
+| `poller_health.sh`, `poller_fleet_sweep.sh` | ✅ subsumed by `aimail fleet` |
+| `fleet_idle.sh` | ✅ the `LAST-STOP` column |
+| stop hook | ✅ `hooks/stop_guard.sh`, 5-arm selftest |
+| `staleness_check.sh` | 🟡 partial — `status` shows un-acked counts, no age alarm |
+| `fleet_watch.sh` (progress watchdog) | ❌ not ported |
+| `fleet_dashboard.sh` (HTML page) | ❌ not ported — terminal only |
+| `gate.sh`, `gate_slot.sh`, `preland.sh`, `preflight.sh`, `verify_refs.sh` | ❌ not ported |
+| `budget.sh`, `token_watch.py`, `burn.py`, `night_gate.sh`, `night_watchdog.sh` | ❌ not ported |
+
+⚠ **The poller reads `state/throttled` and `state/ramp_at`, but nothing writes
+them yet.** The park/ramp path is wired and inert. Until the budget layer lands,
+this tool cannot run an unattended overnight fleet.
+
+[docs/PORTING.md](docs/PORTING.md) maps every known defect to prevented, partial,
+or not-yet-ported, and lists the regressions not to reintroduce.

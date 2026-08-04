@@ -10,3 +10,9 @@ etc/aimail.conf
 # Editor / OS noise
 *.swp
 .DS_Store
+
+# Porting reference — the predecessor's own defect register and design doc.
+# Kept locally because they are the source material for docs/PORTING.md, and
+# NEVER published: they are operational detail about a private project and name
+# real people. PORTING.md restates every mechanism from them in generic terms.
+docs/source_*.md
