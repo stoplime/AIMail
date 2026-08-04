@@ -1,0 +1,30 @@
+# aimail configuration — copy to etc/aimail.conf (which is gitignored).
+#
+# THIS IS THE ONLY PROJECT-SPECIFIC FILE. Everything else in this repo is
+# generic. The system this replaces had its mailbox root hardcoded in 14 files;
+# porting it meant finding all 14.
+
+# Where mail and state live. MUST be outside the repo: mail is machine-local
+# coordination, not source, and committing it would put every message in git.
+AIMAIL_ROOT="$HOME/.aimail"
+
+# Poll interval in seconds. The loop exits on the first trigger, so a short
+# interval costs nothing while idle — an empty cycle is a `find` and a sleep.
+# Tokens are spent only when the poller FIRES.
+AIMAIL_POLL_INTERVAL=5
+
+# Delivery size cap, bytes. Past this the remainder is deferred and stays
+# queued; it is never consumed. A burst of six long messages would otherwise
+# spend a session's context before it had decided anything.
+# ⇒ The cap costs throughput, never correctness.
+POLLER_DRAIN_MAXB=60000
+
+# ─── Budget ───────────────────────────────────────────────────────────────────
+# Per-account session caps, as percentages. An account not listed uses DEFAULT.
+#
+# ⚠ WHY PER-ACCOUNT AND NOT ONE NUMBER: one configured threshold once governed
+#   every account, but a shared account must park lower than a private one —
+#   overrunning there takes tokens from someone who is not in the conversation.
+#   Nobody should discover which account they are on from a lockout.
+AIMAIL_CAP_DEFAULT=90
+# AIMAIL_CAP_shared=80

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# aimail — one entry point for fleet mail.
+#
+# ⛔⛔ WHY A SINGLE DISPATCHER RATHER THAN A DIRECTORY OF SCRIPTS: in the system
+#    this replaces, agents reached the mailbox through ~20 loose scripts plus
+#    raw `mv` commands. Every one was a place to improvise, and improvisation is
+#    where the defects came from — mail moved to the wrong directory, bodies
+#    mangled by the shell, timestamps invented, names typo'd into black holes.
+#    A single verb table means there is one correct way to do each thing and the
+#    tool performs it.
+#
+# ⛔ UNKNOWN VERBS ARE REFUSED, NEVER INTERPRETED. The predecessor's `gate.sh`
+#    took its first argument as a seat name, so `gate.sh who` — which reads
+#    exactly like a status query — created a lock holder literally named `who`
+#    AND started a full test suite. It was used that way ~6 times before anyone
+#    noticed, because when the lock was already held it printed a message
+#    indistinguishable from a status answer.
+#    ⇒ Here, a verb is a verb. `who` is a read and can never be a name.
+
+set -uo pipefail
+
+_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/core.sh
+source "$_SELF/../lib/core.sh"
+source "$_SELF/../lib/registry.sh"
+source "$_SELF/../lib/mail.sh"
+
+usage() {
+  cat <<'EOF'
+aimail — fleet mail with a registered address space.
+
+SEATS (the address space — a name is only an address if it is registered)
+  aimail seat list                          every registered seat
+  aimail seat add <name> [desc] [aliases]   register one
+  aimail seat retire <name> [successor]     stop accepting mail, say what to use
+  aimail seat resolve <name>                what would this name deliver to?
+
+MAIL
+  aimail send --to <seat> [--to <seat>…] --from <seat> --subject <s> --body-file <p>
+  aimail send … < body.md                   body may also arrive on stdin
+  aimail ack <seat> --all | <id>…           acted on it → archive it
+  aimail where <seat> <pattern>             which STATE is a message in?
+
+POLLING
+  aimail poll <seat>                        arm the wake loop (run in background)
+  aimail deliver <seat>                     deliver once, no loop (for testing)
+
+STATUS
+  aimail status [seat]                      queues, un-acked, registry health
+  aimail doctor                             check this installation
+  aimail version
+
+⚠ There is no --body string argument and no --date argument, deliberately.
+  See `aimail send` with neither for why.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  seat)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      list)    seat_list ;;
+      add)     [[ $# -ge 1 ]] || refused "usage: aimail seat add <name> [description] [aliases]"
+               seat_add "$1" "${2:-}" "${3:--}" ;;
+      retire)  [[ $# -ge 1 ]] || refused "usage: aimail seat retire <name> [successor]"
+               seat_retire "$1" "${2:-}" ;;
+      resolve) [[ $# -ge 1 ]] || refused "usage: aimail seat resolve <name>"
+               r="$(seat_resolve "$1")" || exit $?
+               ok "'$1' delivers to '$r'" ;;
+      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | resolve" ;;
+    esac ;;
+
+  send)    ensure_dirs; mail_send "$@" ;;
+  ack)     [[ $# -ge 2 ]] || refused "usage: aimail ack <seat> --all | <id>…"
+           s="$(seat_resolve "$1")" || exit $?; shift; mail_ack "$s" "$@" ;;
+  deliver) [[ $# -ge 1 ]] || refused "usage: aimail deliver <seat>"
+           s="$(seat_resolve "$1")" || exit $?; mail_deliver "$s" "${POLLER_DRAIN_MAXB:-60000}" ;;
+  where)   [[ $# -ge 2 ]] || refused "usage: aimail where <seat> <pattern>"
+           s="$(seat_resolve "$1")" || exit $?; mail_where "$s" "$2" ;;
+
+  poll)    [[ $# -ge 1 ]] || refused "usage: aimail poll <seat>"
+           source "$_SELF/../lib/poller.sh"; poller_run "$@" ;;
+
+  status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
+  doctor)  source "$_SELF/../lib/status.sh"; doctor ;;
+
+  version) info "$(instrument_id)"; info "root: $AIMAIL_ROOT" ;;
+  help|--help|-h|"") usage ;;
+  *)
+    refused "unknown command: '$cmd'" \
+      "Commands are not guessed at. Run 'aimail help' for the verb table." \
+      "(A tool that interprets an unrecognised word as data is how the previous" \
+      " system got a lock holder named 'who'.)" ;;
+esac

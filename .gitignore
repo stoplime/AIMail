@@ -1,0 +1,12 @@
+# The active configuration is machine-local; the example is tracked.
+etc/aimail.conf
+
+# Mail and state NEVER live in the repo. AIMAIL_ROOT points outside it, and
+# `aimail doctor` fails if it does not — but this is the second line of defence.
+/mail/
+/state/
+*.tsv
+
+# Editor / OS noise
+*.swp
+.DS_Store
