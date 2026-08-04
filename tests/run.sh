@@ -261,6 +261,29 @@ if (( SRC_COUNT == 3 )); then
 else FAIL=$((FAIL+1)); FAILURES+=("migrate modified the source"); printf '  ✖ migrate modified the source\n'; fi
 accepts "migrate is idempotent (re-run is safe)" -- migrate "$SRC"
 
+# ⛔ REGRESSION ARM — a real mailbox had a SECOND archive directory named
+#    `_archive`, holding 12 genuine messages. The migrator read only `archive/`
+#    and reported success. A per-seat reconciliation against the source caught
+#    it; the tool's own summary did not. Any subdirectory holds mail.
+mkdir -p "$SRC/oddball/_archive" "$SRC/oddball/archive/nested"
+printf 'in _archive\n' > "$SRC/oddball/_archive/alt.md"
+printf 'nested\n'      > "$SRC/oddball/archive/nested/deep.md"
+printf 'normal\n'      > "$SRC/oddball/archive/plain.md"
+accepts "migrate imports a seat with odd archive layouts" -- migrate "$SRC"
+ODD=$(find "$AIMAIL_ROOT/mail/oddball/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ODD == 3 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 3 archived messages found across _archive/, archive/ and archive/nested/\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("odd archive layouts: got $ODD of 3")
+  printf '  ✖ odd archive layouts: got %s of 3 — a non-standard dir was skipped\n' "$ODD"
+fi
+# ③ the other direction: a dot-directory is tooling and must NOT be imported
+mkdir -p "$SRC/oddball/.pytest_cache"; printf 'junk\n' > "$SRC/oddball/.pytest_cache/j.md"
+accepts "migrate re-run with a dot-dir present"          -- migrate "$SRC"
+if ! find "$AIMAIL_ROOT/mail/oddball" -name 'j.md' | grep -q .; then
+  PASS=$((PASS+1)); printf '  ✔ dot-directory contents were NOT imported\n'
+else FAIL=$((FAIL+1)); FAILURES+=("dot-dir imported"); printf '  ✖ dot-directory contents were imported\n'; fi
+
 section "stop hook — five arms, each asserting its logged DECISION"
 # ⚠ Run as part of the suite, not as a separate manual step. The first version of
 #   this selftest lived outside the suite, and its two "allow" arms passed while

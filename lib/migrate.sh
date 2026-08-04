@@ -81,6 +81,17 @@ migrate_run() {
     "Looked for <src>/<name>/**/*.md, skipping _* and .* directories."
 
   info "discovered ${#found[@]} seat(s): ${found[*]}"
+
+  # ⚠ ANNOUNCE WHAT IS BEING SKIPPED. A migrator that silently ignores a
+  #   directory is how 12 archived messages went missing under a name nobody
+  #   expected. Anything not traversed gets named here, so a human can judge it.
+  local sd skipped_dirs=""
+  for seat in "${found[@]}"; do
+    while IFS= read -r sd; do
+      [[ -n "$sd" ]] && skipped_dirs+="  $seat/$(basename "$sd")"$'\n'
+    done < <(find "$src/$seat" -mindepth 1 -maxdepth 1 -type d -name '.*' 2>/dev/null)
+  done
+  [[ -n "$skipped_dirs" ]] && { warn "skipping dot-directories (tooling, not mail):"; printf '%s' "$skipped_dirs" >&2; }
   echo
 
   # ─── Register ──────────────────────────────────────────────────────────────
@@ -106,6 +117,18 @@ migrate_run() {
     local a=0 i=0 r=0 s=0 f base dest
 
     # Archive → month shards, keyed on mtime.
+    # ⛔⛔ TRAVERSE EVERY SUBDIRECTORY, NOT JUST `archive/`. The first version read
+    #    `$src/$seat/archive` only, and a real mailbox turned out to have a
+    #    SECOND archive directory — `roofing/_archive/` — holding 12 genuine
+    #    messages that were silently skipped. The migration reported success.
+    # ⭐ THAT IS THIS PROJECT'S OWN DEFECT CLASS, committed by its own migrator:
+    #    a directory whose name nobody standardised becomes a black hole, and the
+    #    tool that walks only the expected name cannot see what it missed.
+    #    A per-seat count reconciled against the source is what caught it — the
+    #    tool's own summary said "complete".
+    # ⇒ Anything below the seat directory is archive. Dot-directories are skipped
+    #   because they are tooling (`.pytest_cache`), not mail — and skipping them
+    #   is ANNOUNCED below rather than silent.
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
       base="$(basename "$f")"
@@ -118,7 +141,7 @@ migrate_run() {
       if (( dry )); then a=$((a+1)); continue; fi
       mkdir -p "$(dirname "$dest")"
       cp -p -- "$f" "$dest" && a=$((a+1)) || s=$((s+1))
-    done < <(find "$src/$seat/archive" -name '*.md' 2>/dev/null)
+    done < <(find "$src/$seat" -mindepth 2 -name '*.md' -not -path '*/.*' 2>/dev/null)
 
     # Live inbox → inbox (still undelivered).
     while IFS= read -r f; do
