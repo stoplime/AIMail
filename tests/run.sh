@@ -296,6 +296,109 @@ while IFS= read -r line; do
   esac
 done <<< "$SG"
 
+section "budget — the boundary is measurable, the percentage is not"
+# Stub the block cache so these are fast and deterministic. block_json reads the
+# cache when it is fresher than AIMAIL_BLOCK_TTL, so no network call happens.
+_stub_block() { # _stub_block <minutes-until-end>
+  mkdir -p "$AIMAIL_ROOT/state"
+  python3 -c "
+import json,sys,datetime
+m=int(sys.argv[1]); now=datetime.datetime.now(datetime.timezone.utc)
+end=now+datetime.timedelta(minutes=m); start=end-datetime.timedelta(hours=5)
+print(json.dumps({'blocks':[{'isActive':True,'startTime':start.isoformat().replace('+00:00','Z'),
+ 'endTime':end.isoformat().replace('+00:00','Z'),'totalTokens':123,'costUSD':1.0,
+ 'projection':{'remainingMinutes':m},'burnRate':{'tokensPerMinuteForIndicator':7}}]}))" "$1" \
+  > "$AIMAIL_ROOT/state/block.json"
+}
+_stub_block 200
+accepts "budget status reads the anchored block"  -- budget status
+accepts "budget account resolves an identity"     -- budget account
+refuses "a non-numeric callout is refused" "callout <0-100>"  -- budget callout ninety
+refuses "a callout over 100 is refused"    "callout <0-100>"  -- budget callout 150
+accepts "a valid callout is recorded"                          -- budget callout 42
+
+# ③ the other direction — with no block readable it must say UNMEASURABLE, never
+#    report "0 minutes left", which would read as "the block just ended".
+rm -f "$AIMAIL_ROOT/state/block.json"
+AIMAIL_CCUSAGE_TIMEOUT=1 PATH=/nonexistent:/usr/bin:/bin \
+  "$AIMAIL" budget status >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"; rc=$?
+if [[ "$rc" == "4" ]] && grep -qiF "could not be read" "$AIMAIL_ROOT/.err"; then
+  PASS=$((PASS+1)); printf '  ✔ an unreadable block is UNMEASURABLE (exit 4), not 0 minutes\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("unreadable block did not report UNMEASURABLE")
+  printf '  ✖ unreadable block: exit %s (wanted 4)\n' "$rc"
+fi
+
+section "budget — checkpoint fires once per block, not once per tick"
+# ① the arm failing first: an unregistered sender must REFUSE and, critically,
+#    must NOT write the done-marker — otherwise a failed checkpoint records
+#    itself as complete and never retries for that block.
+_stub_block 10
+refuses "an unregistered supervisor refuses the checkpoint" "not a registered seat" \
+  -- budget checkpoint
+if [[ ! -f "$AIMAIL_ROOT/state/checkpoint_done" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ a refused checkpoint wrote NO marker, so it will retry\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("refused checkpoint wrote a done-marker")
+  printf '  ✖ a refused checkpoint wrote a done-marker — that block would never retry\n'
+fi
+accepts "register the supervisor seat"             -- seat add assistant "Supervisor"
+_stub_block 200
+accepts "checkpoint not due far from the boundary" -- budget checkpoint
+_stub_block 10
+accepts "checkpoint fires inside the window"       -- budget checkpoint
+CK1=$(find "$AIMAIL_ROOT/mail" -iname '*checkpoint*' | wc -l)
+accepts "checkpoint is idempotent within a block"  -- budget checkpoint
+CK2=$(find "$AIMAIL_ROOT/mail" -iname '*checkpoint*' | wc -l)
+# ⛔ `now >= X` stays true forever once true. Keyed on a boolean this becomes a
+#    wake loop firing every tick — the most expensive bug in a supervision path.
+if (( CK1 > 0 && CK2 == CK1 )); then
+  PASS=$((PASS+1)); printf '  ✔ sent %s, re-run sent 0 more (marker keyed on the block end)\n' "$CK1"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("checkpoint re-fired: $CK1 -> $CK2")
+  printf '  ✖ checkpoint re-fired within one block: %s -> %s\n' "$CK1" "$CK2"
+fi
+# ③ …and a NEW block must still checkpoint, or the guard becomes a permanent block
+_stub_block 9
+accepts "a new block checkpoints again"            -- budget checkpoint
+CK3=$(find "$AIMAIL_ROOT/mail" -iname '*checkpoint*' | wc -l)
+if (( CK3 > CK2 )); then
+  PASS=$((PASS+1)); printf '  ✔ a new block re-fired the checkpoint (%s -> %s)\n' "$CK2" "$CK3"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("new block did not checkpoint")
+  printf '  ✖ a new block did NOT checkpoint (%s -> %s)\n' "$CK2" "$CK3"
+fi
+
+section "budget — park keeps pollers ARMED and the ramp wakes them"
+accepts "park writes the throttle flag"            -- budget park "test park"
+if [[ -f "$AIMAIL_ROOT/state/throttled" ]] && grep -q 'STAY ARMED' "$AIMAIL_ROOT/state/throttled"; then
+  PASS=$((PASS+1)); printf '  ✔ the throttle flag tells seats to STAY ARMED\n'
+else FAIL=$((FAIL+1)); FAILURES+=("throttle flag missing the stay-armed instruction")
+     printf '  ✖ throttle flag does not say STAY ARMED\n'; fi
+# ⭐ THE INTEGRATION CLAIM: a poller parks on the flag, does NOT consume mail,
+#    and wakes ITSELF at the ramp with nobody touching it.
+printf 'x\n' > "$AIMAIL_ROOT/pk.md"
+"$AIMAIL" send --to main --from main --subject "during park" --body-file "$AIMAIL_ROOT/pk.md" >/dev/null 2>&1
+printf 'at\t%s\n' "$(( $(date +%s) + 3600 ))" > "$AIMAIL_ROOT/state/ramp_at"
+"$AIMAIL" poll main > "$AIMAIL_ROOT/park.log" 2>&1 &
+PARKPID=$!; sleep 4
+if kill -0 $PARKPID 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ poller stays ARMED and asleep under a throttle (does not exit)\n'
+else FAIL=$((FAIL+1)); FAILURES+=("poller exited under a throttle"); printf '  ✖ poller exited under a throttle\n'; fi
+QD=$(find "$AIMAIL_ROOT/mail/main" -maxdepth 1 -name '*.md' | wc -l)
+if (( QD >= 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ mail sent during the park is queued, not consumed\n'
+else FAIL=$((FAIL+1)); FAILURES+=("parked poller consumed mail"); printf '  ✖ parked poller consumed mail\n'; fi
+accepts "ramp clears the throttle"                 -- budget ramp
+printf 'at\t%s\n' "$(( $(date +%s) - 10 ))" > "$AIMAIL_ROOT/state/ramp_at"
+sleep 8
+if ! kill -0 $PARKPID 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ the poller woke ITSELF at the ramp — no human, no coordinator\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("poller did not self-wake at the ramp"); kill $PARKPID 2>/dev/null
+  printf '  ✖ poller did not wake at the ramp\n'
+fi
+
 section "doctor"
 accepts "doctor runs"                          -- doctor
 

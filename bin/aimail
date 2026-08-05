@@ -54,6 +54,18 @@ FLEET — who is working, who is reachable, who needs a human
   RE-ARMING, not DOWN, for AIMAIL_REARM_GRACE seconds. Only CRASHED — no exit
   record at all — means a human is needed.
 
+BUDGET — keyed on the block BOUNDARY, which is measurable
+  aimail budget status                      block, last callout (with its age), schedule
+  aimail budget callout <pct>               record a /usage reading — the only true level
+  aimail budget checkpoint [--now]          ask every seat to write ROLE.md
+  aimail budget park [reason] | ramp        set/clear the throttle flag
+  aimail budget autopilot                   the cron entry point (checkpoint→park→ramp)
+  aimail budget account                     which account, and its cap
+
+⛔ PARK IS NOT DISARM. Pollers sleep on the throttle flag and wake themselves at
+  the ramp. A disarmed poller also costs nothing and NEVER wakes — only a human
+  can restart it. Never tell a seat to disarm.
+
 STATUS
   aimail status [seat]                      queues, un-acked, registry health
   aimail doctor                             check this installation
@@ -95,6 +107,24 @@ case "$cmd" in
   fleet|who)
            source "$_SELF/../lib/fleet.sh"; fleet_report "$@" ;;
   migrate) source "$_SELF/../lib/migrate.sh"; migrate_run "$@" ;;
+
+  budget)
+    source "$_SELF/../lib/budget.sh"
+    sub="${1:-status}"; shift || true
+    case "$sub" in
+      status)     budget_status ;;
+      callout)    budget_callout "${1:-}" ;;
+      block)      source "$_SELF/../lib/budget.sh"
+                  b="$(block_field end)" || unmeasurable "no active 5-hour block could be read"
+                  info "block ends $(date -d "@$b" '+%F %H:%M') ($(( (b - $(now_epoch))/60 )) min)" ;;
+      park)       budget_park "$@" ;;
+      ramp)       budget_ramp ;;
+      checkpoint) budget_checkpoint "${1:-}" ;;
+      autopilot)  budget_autopilot ;;
+      account)    info "account: $(account_id)    cap: $(account_cap)%" ;;
+      *) refused "unknown 'budget' subcommand: '${sub}'" \
+           "Try: status | callout <pct> | block | checkpoint | park | ramp | autopilot | account" ;;
+    esac ;;
 
   status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
   doctor)  source "$_SELF/../lib/status.sh"; doctor ;;

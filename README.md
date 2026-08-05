@@ -131,7 +131,7 @@ mtime so the chronology survives, and `ROLE.md` moves out of the inbox to
 ## Testing
 
 ```bash
-bash tests/run.sh                    # 51 tests
+bash tests/run.sh                    # 76 tests
 bash hooks/stop_guard.sh selftest    # 5 arms, also run by the suite
 ```
 
@@ -140,14 +140,80 @@ positive control on the nearest valid input so an always-refusing guard cannot
 hide (③).
 
 Mutation-verified: disabling the fence guard, the ack gate, the broadcast-pronoun
-guard, the crashed/re-arming distinction, or the exit-record branch each turns the
-suite red, and it returns green when restored.
+guard, the crashed/re-arming distinction, the exit-record branch, the
+archive-traversal fix, the checkpoint marker ordering, or the poller's park
+behaviour each turns the suite red, and it returns green when restored.
 
 ⚠ One of those mutations initially reported a false all-clear, because the `sed`
 meant to apply it silently did not match. **A decoy that cannot apply its patch
 proves nothing** — assert the patch landed before drawing any conclusion from the
 result. The same shape appeared in the stop-hook selftest, where two "allow" arms
 passed while the guard was switched off entirely.
+
+## Budget, checkpoint, and unattended overnight running
+
+```bash
+aimail budget status          # the block, the last callout AND ITS AGE, the schedule
+aimail budget callout 42      # record a /usage reading — the only true level
+```
+
+**The one idea this is built around: the block boundary is measurable, the
+percentage is not.** Everything that must work unattended is keyed on the
+boundary; only advisory output is keyed on the percentage.
+
+`/usage` shows the official session and weekly percentages and is **not
+programmatically accessible** — not via statusLine, hooks, files, an API, or an
+environment variable ([issue #20636](https://github.com/anthropics/claude-code/issues/20636),
+closed unimplemented). So a human reading `/usage` aloud is the only source of a
+true level. `budget callout` is first-class, not a fallback.
+
+The *boundary*, though, is knowable: a block starts at your first message and
+runs exactly 5 hours, and `ccusage` models that as an anchored block. So the
+checkpoint — *"write your ROLE.md while there is still budget to write it"* —
+fires on the clock, hours of warning, no percentage involved. When an account is
+switched every session's context switches with it, so those ROLE.md files **are**
+the handover.
+
+⛔ **Do not "fix" a boundary over-read by rescaling a budget.** A *trailing* 5h
+window over-reads right after a reset by construction — it still reaches into the
+dead block. Rescaling to correct that makes it under-report for the rest of the
+window, inventing headroom. Anchored blocks avoid the artefact entirely.
+
+### Cron — because a session's children die with the session
+
+```cron
+*/5 * * * * /path/to/aimail/bin/aimail budget autopilot >> ~/.aimail/state/autopilot.log 2>&1
+```
+
+`autopilot` ramps if the block rolled, checkpoints at `AIMAIL_CHECKPOINT_MIN`
+before the end, and parks at `AIMAIL_PARK_MIN`. It belongs in cron because a
+`run_in_background` task is a *child of the session* — it dies exactly when the
+session dies, which is the scenario night mode exists to survive.
+
+### Park is not disarm
+
+Setting the throttle flag makes every poller **sleep on it and wake itself at the
+ramp**. Verified end to end in the suite: a parked poller stays alive, mail sent
+during the park stays queued rather than being consumed, and the poller exits on
+its own when the ramp passes — no human, no coordinator.
+
+A parked poller costs nothing and wakes itself. A **disarmed** poller also costs
+nothing and *never wakes* — only a human can restart it. Identical on a token
+bill, opposite in recoverability. Never tell a seat to disarm.
+
+### Per-account caps
+
+```bash
+AIMAIL_CAP_DEFAULT=90
+AIMAIL_CAP_shared=80     # a shared account must park lower
+```
+
+The account is read from the `~/.claude` symlink target, which is what the VS
+Code profile switcher repoints. That also means each account has its own
+transcripts, so anything derived from them is already per-account. Overrunning on
+a shared account spends someone else's tokens, and they are not in the
+conversation to object — nobody should learn which account they are on from a
+lockout.
 
 ## Status
 
@@ -163,11 +229,11 @@ Measured against the toolset it replaces:
 | `fleet_watch.sh` (progress watchdog) | ❌ not ported |
 | `fleet_dashboard.sh` (HTML page) | ❌ not ported — terminal only |
 | `gate.sh`, `gate_slot.sh`, `preland.sh`, `preflight.sh`, `verify_refs.sh` | ❌ not ported |
-| `budget.sh`, `token_watch.py`, `burn.py`, `night_gate.sh`, `night_watchdog.sh` | ❌ not ported |
+| `budget.sh`, `token_watch.py`, `burn.py`, `night_gate.sh`, `night_watchdog.sh` | ✅ replaced by `aimail budget` on anchored `ccusage` blocks |
 
-⚠ **The poller reads `state/throttled` and `state/ramp_at`, but nothing writes
-them yet.** The park/ramp path is wired and inert. Until the budget layer lands,
-this tool cannot run an unattended overnight fleet.
+⚠ Still missing for a full cutover: the **gate** (suite serialisation) and
+`preland` (the uncommitted-worktree collision check). Those protect a shared test
+suite and a shared trunk; nothing here replaces them yet.
 
 [docs/PORTING.md](docs/PORTING.md) maps every known defect to prevented, partial,
 or not-yet-ported, and lists the regressions not to reintroduce.
