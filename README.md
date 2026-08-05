@@ -131,7 +131,7 @@ mtime so the chronology survives, and `ROLE.md` moves out of the inbox to
 ## Testing
 
 ```bash
-bash tests/run.sh                    # 76 tests
+bash tests/run.sh                    # 81 tests
 bash hooks/stop_guard.sh selftest    # 5 arms, also run by the suite
 ```
 

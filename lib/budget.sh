@@ -119,19 +119,91 @@ else: sys.exit(4)
 #    183%/hour rate. The first fix patched two of three call sites, and leaving
 #    the third — the throttle path — live read exactly like a whole fix.
 budget_callout() {
-  local pct="${1:-}"
-  [[ "$pct" =~ ^[0-9]+$ ]] && (( pct <= 100 )) || refused "usage: aimail budget callout <0-100>" \
+  local pct="${1:-}"; shift || true
+  local resets="" left=""
+  while (( $# )); do
+    case "$1" in
+      --resets) resets="$2"; shift 2 ;;   # HH:MM, exactly as /usage prints it
+      --left)   left="$2";   shift 2 ;;   # minutes remaining, if that is easier
+      *) refused "unknown callout argument: '$1'" "Try: --resets HH:MM | --left <minutes>" ;;
+    esac
+  done
+  [[ "$pct" =~ ^[0-9]+$ ]] && (( pct <= 100 )) || refused "usage: aimail budget callout <0-100> [--resets HH:MM | --left <min>]" \
     "This records a percentage READ FROM /usage — the only authoritative level." \
     "It is not an estimate and must not be one."
   ensure_dirs
-  local be; be="$(block_field end 2>/dev/null || echo '')"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(now_epoch)" "$(account_id)" "$pct" "callout" "${be:-}" >> "$LEDGER"
+
+  # ⭐⭐ RECORD THE RESET TIME TOO, BECAUSE /usage PRINTS IT RIGHT NEXT TO THE
+  #    PERCENTAGE and it is the only authoritative boundary that exists.
+  # ⛔ MEASURED 2026-08-04, and this is why the argument exists: ccusage FLOORS a
+  #    block's start to the hour (startTime came back 18:00:00 exactly), so its
+  #    end is LATE by however far into the hour the block really began. Against a
+  #    /usage reading of "1h40m left" at 20:59 — a real reset of 22:40 — ccusage
+  #    claimed 23:00. **Twenty minutes late, in the dangerous direction:** a park
+  #    scheduled at end−10 would have fired at 22:50, i.e. AFTER the boundary it
+  #    exists to get ahead of, so the fleet would never have parked at all.
+  local reset_epoch=""
+  if [[ -n "$left" ]]; then
+    [[ "$left" =~ ^[0-9]+$ ]] || refused "--left takes minutes as a number."
+    reset_epoch=$(( $(now_epoch) + left * 60 ))
+  elif [[ -n "$resets" ]]; then
+    reset_epoch="$(date -d "today $resets" +%s 2>/dev/null)" \
+      || refused "--resets could not be parsed: '$resets'" "Give it as HH:MM, e.g. --resets 22:40"
+    # A reset that has already passed today means tomorrow.
+    (( reset_epoch <= $(now_epoch) )) && reset_epoch="$(date -d "tomorrow $resets" +%s)"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(now_epoch)" "$(account_id)" "$pct" "callout" "${reset_epoch:-}" >> "$LEDGER"
   ok "recorded ${pct}% for account '$(account_id)' (cap $(account_cap)%)"
+  if [[ -n "$reset_epoch" ]]; then
+    info "  authoritative reset: $(date -d "@$reset_epoch" '+%F %H:%M') — this now governs the schedule"
+  else
+    warn "  no reset time given. The schedule will fall back to ccusage, which floors"
+    warn "  the block start to the hour and therefore reads LATE. Prefer:"
+    warn "    aimail budget callout $pct --resets HH:MM   (as /usage prints it)"
+  fi
 }
 
-_last_callout() { # prints: epoch<TAB>pct  for THIS account, or nothing
+_last_callout() { # prints: epoch<TAB>pct<TAB>reset_epoch  for THIS account
   [[ -s "$LEDGER" ]] || return 1
-  awk -F'\t' -v a="$(account_id)" '$2==a && $4=="callout"{e=$1; p=$3} END{if(e) printf "%s\t%s", e, p}' "$LEDGER"
+  awk -F'\t' -v a="$(account_id)" \
+    '$2==a && $4=="callout"{e=$1; p=$3; r=$5} END{if(e) printf "%s\t%s\t%s", e, p, r}' "$LEDGER"
+}
+
+# ⭐⭐ THE EFFECTIVE BOUNDARY — prints: epoch<TAB>source
+#
+# Two candidates, and they are NOT equally trustworthy:
+#   callout  the reset time a human read from /usage. AUTHORITATIVE.
+#   ccusage  derived from local transcripts, and LATE BY CONSTRUCTION because it
+#            floors the block start to the hour (measured 20 min late).
+#
+# ⛔ WHEN THEY DISAGREE, TAKE THE EARLIER ONE, and say so. The asymmetry is the
+#    whole argument: being EARLY costs one checkpoint mail nobody needed, while
+#    being LATE means the park fires after the boundary and the fleet never parks
+#    — it just hits the cap mid-work with no handover written. A cheap false
+#    positive beats an expensive false negative every time here.
+block_end_effective() {
+  local cc lc lc_e lc_r
+  cc="$(block_field end 2>/dev/null || echo '')"
+  lc="$(_last_callout 2>/dev/null || true)"
+  lc_e="$(cut -f1 <<<"${lc:-}")"; lc_r="$(cut -f3 <<<"${lc:-}")"
+
+  # A callout's reset only describes the block it was taken in. Once that reset
+  # has passed, it describes a DEAD window and must not govern anything.
+  if [[ "$lc_r" =~ ^[0-9]+$ ]] && (( lc_r > $(now_epoch) )); then
+    if [[ "$cc" =~ ^[0-9]+$ ]]; then
+      local d=$(( cc > lc_r ? cc - lc_r : lc_r - cc ))
+      if (( d > 300 )); then
+        warn "boundary disagreement: /usage says $(date -d "@$lc_r" '+%H:%M'), ccusage says $(date -d "@$cc" '+%H:%M') ($(( d/60 )) min apart)"
+        warn "  using the EARLIER. ccusage floors the block start to the hour, so it reads late."
+      fi
+      (( lc_r < cc )) && { printf '%s\tcallout\n' "$lc_r"; return 0; }
+      printf '%s\tccusage\n' "$cc"; return 0
+    fi
+    printf '%s\tcallout\n' "$lc_r"; return 0
+  fi
+  [[ "$cc" =~ ^[0-9]+$ ]] && { printf '%s\tccusage\n' "$cc"; return 0; }
+  return 1
 }
 
 # ─── Status ───────────────────────────────────────────────────────────────────
@@ -140,9 +212,11 @@ budget_status() {
   info "account: $acct    cap: ${cap}%    $(instrument_id)"
   echo
 
-  local bs be rem tok burn
-  bs="$(block_field start)"; be="$(block_field end)"
+  local bs be be_src rem tok burn eff
+  bs="$(block_field start)"
   rem="$(block_field remaining_min)"; tok="$(block_field tokens)"; burn="$(block_field burn_per_min)"
+  eff="$(block_end_effective || true)"
+  be="$(cut -f1 <<<"${eff:-}")"; be_src="$(cut -f2 <<<"${eff:-}")"
 
   if [[ -z "$be" ]]; then
     # ⛔ Not "0 minutes remaining". That would read as "the block just ended".
@@ -152,17 +226,21 @@ budget_status() {
       "Everything below depends on it, so nothing is reported rather than guessed."
   fi
 
-  echo "MEASURED — the anchored 5-hour block (from local transcripts):"
-  printf '  started        %s\n' "$(date -d "@$bs" '+%F %H:%M')"
-  printf '  ends           %s   (in %s min)\n' "$(date -d "@$be" '+%F %H:%M')" "$(( (be - $(now_epoch)) / 60 ))"
+  echo "DERIVED — the block as ccusage reads it (local transcripts):"
+  printf '  started        %s   ⚠ floored to the hour, so the end reads LATE\n' "$(date -d "@$bs" '+%F %H:%M')"
   printf '  tokens so far  %s\n' "$tok"
   printf '  burn/min       %s\n' "$burn"
+  echo
+  echo "EFFECTIVE BOUNDARY — source: $be_src"
+  printf '  ends           %s   (in %s min)\n' "$(date -d "@$be" '+%F %H:%M')" "$(( (be - $(now_epoch)) / 60 ))"
+  [[ "$be_src" == "ccusage" ]] && \
+    printf '  ⚠ no fresh /usage reset time — this may be up to an hour LATE.\n     aimail budget callout <pct> --resets HH:MM\n'
   echo
 
   local lc lc_e lc_p
   lc="$(_last_callout || true)"
   if [[ -n "$lc" ]]; then
-    lc_e="${lc%%$'\t'*}"; lc_p="${lc##*$'\t'}"
+    lc_e="$(cut -f1 <<<"$lc")"; lc_p="$(cut -f2 <<<"$lc")"
     local age; age="$(age_min "$lc_e")"
     echo "MEASURED — the last /usage callout (the only true level):"
     # ⚠ ALWAYS PRINT THE ANCHOR'S AGE. A watchdog once advised a fleet-wide
@@ -209,7 +287,7 @@ budget_status() {
 budget_park() {
   local reason="${*:-scheduled park before the block boundary}"
   ensure_dirs
-  local be; be="$(block_field end 2>/dev/null || echo '')"
+  local be; be="$(block_end_effective 2>/dev/null | cut -f1 || echo '')"
   if [[ -f "$STATE_DIR/throttled" ]]; then
     info "already parked — leaving the original reason in place:"; sed 's/^/  /' "$STATE_DIR/throttled"; return 0
   fi
@@ -251,7 +329,7 @@ budget_ramp() {
 #   before.
 budget_checkpoint() {
   local force="${1:-}"
-  local be; be="$(block_field end)" || true
+  local be; be="$(block_end_effective 2>/dev/null | cut -f1)" || true
   [[ -n "$be" ]] || unmeasurable "cannot read the block end, so the checkpoint cannot be scheduled" \
     "A checkpoint fired at the wrong time is worse than none: it spends budget" \
     "writing a handover nobody needed yet."
@@ -340,7 +418,7 @@ EOF
 #   */5 * * * * /path/to/bin/aimail budget autopilot >> ~/.aimail/state/autopilot.log 2>&1
 budget_autopilot() {
   local be now; now="$(now_epoch)"
-  be="$(block_field end)" || {
+  be="$(block_end_effective 2>/dev/null | cut -f1)"; [[ -n "$be" ]] || {
     # ⚠ Refuse loudly rather than doing nothing quietly. A silent no-op here is
     #   indistinguishable from a healthy tick, and the failure would only surface
     #   as a fleet that never checkpointed.

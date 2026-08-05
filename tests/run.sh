@@ -329,6 +329,45 @@ else
   printf '  ✖ unreadable block: exit %s (wanted 4)\n' "$rc"
 fi
 
+section "budget — a /usage reset beats ccusage, and the EARLIER one wins"
+# ⛔ MEASURED DEFECT: ccusage floors a block's start to the hour, so its end reads
+#    LATE — 20 minutes, against a real /usage reset. The direction is the
+#    dangerous one: a park at end−10 would fire AFTER the real boundary, so the
+#    fleet would never park at all. Being early costs one unneeded checkpoint;
+#    being late costs the handover.
+_stub_block 120          # ccusage claims 120 min left
+accepts "callout with --left records a reset"  -- budget callout 78 --left 100
+"$AIMAIL" budget status >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"
+if grep -q 'source: callout' "$AIMAIL_ROOT/.out" && grep -qi 'boundary disagreement' "$AIMAIL_ROOT/.err"; then
+  PASS=$((PASS+1)); printf '  ✔ the earlier /usage boundary wins, and the disagreement is announced\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("callout boundary did not override ccusage")
+  printf '  ✖ callout boundary did not override ccusage\n'
+fi
+# ③ THE OTHER DIRECTION — if the callout is LATER than ccusage, ccusage wins.
+#    A rule that always prefers the callout is not "take the earlier", and would
+#    happily accept a boundary later than the evidence supports.
+_stub_block 30
+accepts "callout later than ccusage"           -- budget callout 50 --left 300
+"$AIMAIL" budget status >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"
+if grep -q 'source: ccusage' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ when the callout is LATER, the earlier ccusage boundary wins\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("did not take the earlier boundary when callout was later")
+  printf '  ✖ did not take the earlier boundary when the callout was later\n'
+fi
+# ② a callout whose reset has already PASSED describes a dead window and must
+#    not govern anything — a window CLOSING is a reset, not a budget spent.
+printf '%s\t%s\t%s\tcallout\t%s\n' "$(date +%s)" "$("$AIMAIL" budget account | grep -oE 'account: [^ ]+' | cut -d' ' -f2)" 60 "$(( $(date +%s) - 600 ))" >> "$AIMAIL_ROOT/state/budget_ledger.tsv" 2>/dev/null || true
+_stub_block 120
+"$AIMAIL" budget status >"$AIMAIL_ROOT/.out" 2>&1
+if grep -q 'source: ccusage' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ an expired callout reset is ignored (falls back to ccusage)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("expired callout reset still governed the schedule")
+  printf '  ✖ an expired callout reset still governed the schedule\n'
+fi
+
 section "budget — checkpoint fires once per block, not once per tick"
 # ① the arm failing first: an unregistered sender must REFUSE and, critically,
 #    must NOT write the done-marker — otherwise a failed checkpoint records

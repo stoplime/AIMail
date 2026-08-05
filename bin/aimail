@@ -113,7 +113,7 @@ case "$cmd" in
     sub="${1:-status}"; shift || true
     case "$sub" in
       status)     budget_status ;;
-      callout)    budget_callout "${1:-}" ;;
+      callout)    budget_callout "$@" ;;
       block)      source "$_SELF/../lib/budget.sh"
                   b="$(block_field end)" || unmeasurable "no active 5-hour block could be read"
                   info "block ends $(date -d "@$b" '+%F %H:%M') ($(( (b - $(now_epoch))/60 )) min)" ;;
