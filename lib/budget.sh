@@ -74,6 +74,13 @@ block_json() {
     local age=$(( $(now_epoch) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
     (( age < BUDGET_CACHE_TTL )) && { cat "$cache"; return 0; }
   fi
+  # ⛔ HERMETIC BY CONSTRUCTION, NOT BY TIMING LUCK. With AIMAIL_NO_NETWORK=1 this
+  #    never shells out — it uses the cache or fails. The suite sets it, because a
+  #    test that reaches the network hangs on a slow day and then gets "fixed" by
+  #    raising a timeout until it stops proving anything. Measured: a stubbed block
+  #    whose 60s cache expired mid-run turned a unit test into a live ccusage call
+  #    and the suite produced NO OUTPUT for two minutes.
+  [[ "${AIMAIL_NO_NETWORK:-0}" == "1" ]] && return 1
   command -v npx >/dev/null 2>&1 || return 1
   local tmp; tmp="$(mktemp "$STATE_DIR/.block.XXXXXX")"
   # ⚠ The exit status is captured directly, not through a pipe. A pipeline's
@@ -363,16 +370,26 @@ budget_checkpoint() {
   cat > "$body" <<EOF
 # ⏱ CHECKPOINT — the 5-hour block ends at $(date -d "@$be" '+%H:%M') (${left} min)
 
-Write **ROLE.md** now, while there is still budget to write it.
+Write your handover now, while there is still budget to write it.
 
-When the account is switched, every session's context switches with it. The
-ROLE.md files are the entire handover: a seat that has not written one resumes
-blind and re-derives work that was already done.
+    aimail role write <your-seat> handover.md
+    aimail role write <your-seat> < handover.md      # or pipe it
+
+⚠ Use that command, not a file path you remember. The handover does NOT live in
+your inbox any more — it lives outside it, precisely so it can never be delivered
+to you as mail. \`aimail role path <your-seat>\` prints the location if you want it.
+
+When the account is switched, every session's context switches with it. Your
+handover is the ONLY thing that crosses that boundary: a seat that has not written
+one resumes blind and re-derives work that was already done.
 
 Put in it, concretely:
 - what is DONE, with the evidence (a sha, a path, a command and its output)
 - what is IN FLIGHT, and the exact next step
 - what it is BLOCKED on, and who owes the answer
+
+Keep it CURRENT STATE, not an append-only log. A handover large enough to consume
+a fresh session's context defeats the purpose it exists for.
 
 Then **stay armed**. The poller parks itself on the throttle flag and wakes at
 the ramp. Do not disarm it — a parked poller wakes itself, a disarmed one never

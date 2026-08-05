@@ -108,6 +108,27 @@ case "$cmd" in
            source "$_SELF/../lib/fleet.sh"; fleet_report "$@" ;;
   migrate) source "$_SELF/../lib/migrate.sh"; migrate_run "$@" ;;
 
+  role)
+    source "$_SELF/../lib/role.sh"
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      show)  [[ $# -ge 1 ]] || refused "usage: aimail role show <seat>"
+             s="$(seat_resolve "$1")" || exit $?; role_show "$s" ;;
+      write) [[ $# -ge 1 ]] || refused "usage: aimail role write <seat> [file]  (or pipe on stdin)"
+             s="$(seat_resolve "$1")" || exit $?; role_write "$s" "${2:-}" ;;
+      stale) role_stale "${1:-}" ;;
+      path)  [[ $# -ge 1 ]] || refused "usage: aimail role path <seat>"
+             s="$(seat_resolve "$1")" || exit $?; info "$(ROLE_FILE "$s")" ;;
+      *) refused "unknown 'role' subcommand: '${sub:-（none）}'" "Try: show | write | stale | path" ;;
+    esac ;;
+
+  resume)
+    [[ $# -ge 1 ]] || refused "usage: aimail resume <seat>" \
+      "Run this FIRST on a new account. It prints the handover, what mail is" \
+      "waiting, and the three commands that make you reachable again."
+    source "$_SELF/../lib/role.sh"
+    s="$(seat_resolve "$1")" || exit $?; role_resume "$s" ;;
+
   budget)
     source "$_SELF/../lib/budget.sh"
     sub="${1:-status}"; shift || true

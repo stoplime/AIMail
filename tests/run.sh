@@ -35,6 +35,9 @@ PASS=0; FAIL=0; declare -a FAILURES=()
 #   root is an env var the tests set to a temp dir.
 export AIMAIL_ROOT; AIMAIL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/aimail-test.XXXXXX")"
 export AIMAIL_CONFIG=/dev/null
+# ⛔ NO NETWORK, AND NO CACHE EXPIRY. A stubbed block must stay stubbed for the
+#    whole run; an expiring stub silently becomes a live ccusage call.
+export AIMAIL_NO_NETWORK=1 AIMAIL_BLOCK_TTL=999999
 trap 'rm -rf "$AIMAIL_ROOT"' EXIT
 
 _run() { "$AIMAIL" "$@" >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"; echo $?; }
@@ -437,6 +440,60 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("poller did not self-wake at the ramp"); kill $PARKPID 2>/dev/null
   printf '  ✖ poller did not wake at the ramp\n'
 fi
+
+section "role — the handover, and the resume that reads it"
+# ⛔ A seat with no handover resumes BLIND after an account switch. "No role file"
+#    and "an empty handover" must not read the same as "nothing to hand over".
+unmeasurable_test "a missing role file is UNMEASURABLE, not empty" "resumes blind" \
+  -- role show main
+printf '# handover\n\nDONE: nothing yet.\n' > "$AIMAIL_ROOT/h.md"
+accepts "write a handover from a file"          -- role write main "$AIMAIL_ROOT/h.md"
+accepts "show it back"                          -- role show main
+accepts "role path prints a location"           -- role path main
+# ⚠ The handover must NOT be reachable by the mail glob — that was the whole
+#   reason it moved out of the inbox.
+if ! find "$AIMAIL_ROOT/mail/main" -maxdepth 1 -name '*.md' | xargs -r grep -l 'DONE: nothing yet' >/dev/null 2>&1; then
+  PASS=$((PASS+1)); printf '  ✔ the handover is not in the inbox, so it can never be delivered as mail\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("handover landed where mail is globbed")
+  printf '  ✖ the handover is reachable by the inbox glob\n'
+fi
+# a rewrite keeps the previous version — an overwritten handover is a silent loss
+printf '# v2\n' > "$AIMAIL_ROOT/h2.md"
+accepts "rewrite the handover"                  -- role write main "$AIMAIL_ROOT/h2.md"
+if [[ -f "$AIMAIL_ROOT/roles/.main.prev.md" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ the previous handover was kept\n'
+else FAIL=$((FAIL+1)); FAILURES+=("previous handover not kept"); printf '  ✖ previous handover was discarded\n'; fi
+
+section "role stale — the checkpoint's verification arm"
+# ⭐ Sending the checkpoint proves a REQUEST was made. It proves nothing about
+#    whether a handover exists. These two arms are that difference.
+_stub_block 200
+rc="$(_run role stale)"
+if [[ "$rc" == "1" ]] && grep -qi 'resume BLIND' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ seats without a current handover are reported, exit 1\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("role stale did not flag missing handovers (exit $rc)")
+  printf '  ✖ role stale did not flag missing handovers (exit %s)\n' "$rc"
+fi
+# ③ the other direction — once every active seat has a fresh handover it must
+#    say SAFE. A check that can only ever refuse would block every switch forever.
+while IFS= read -r s; do
+  [[ -n "$s" ]] || continue
+  [[ "$("$AIMAIL" seat resolve "$s" >/dev/null 2>&1; echo ok)" == "ok" ]] || continue
+  "$AIMAIL" role write "$s" "$AIMAIL_ROOT/h.md" >/dev/null 2>&1
+done < <("$AIMAIL" seat list 2>/dev/null | awk 'NR>2 && $2=="active"{print $1}')
+rc="$(_run role stale)"
+if [[ "$rc" == "0" ]] && grep -qi 'Safe to switch' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ with every active seat current, it reports SAFE TO SWITCH (exit 0)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("role stale never clears (exit $rc)")
+  printf '  ✖ role stale never clears — it would block every switch (exit %s)\n' "$rc"
+fi
+accepts "resume prints the handover and the next steps" -- resume main
+if grep -q 'YOUR NEXT THREE COMMANDS' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ resume names the exact commands that make a seat reachable\n'
+else FAIL=$((FAIL+1)); FAILURES+=("resume did not print next steps"); printf '  ✖ resume did not print next steps\n'; fi
 
 section "doctor"
 accepts "doctor runs"                          -- doctor
