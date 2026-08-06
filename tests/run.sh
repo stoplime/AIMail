@@ -601,6 +601,38 @@ else
 fi
 accepts "ack the probe message" -- ack main --all
 
+section "poller — AR-07/R-2: a non-regular *.md entry must not wake or wedge the poller"
+# ⛔⛔ THE DEFECT: the wake predicate (`find -name '*.md' | wc -l`) and the
+#   delivery predicate (which skips anything failing `[[ -f "$f" ]]`) disagreed
+#   about what a message IS. A directory named `notes.md` — or a broken
+#   symlink — was counted as pending forever, delivery silently skipped it and
+#   removed nothing, and NO VERB could clear the resulting loop. Reproduce the
+#   exact shape named in the review: a directory, not a file.
+mkdir -p "$AIMAIL_ROOT/mail/main/notes.md"
+"$AIMAIL" poll main > "$AIMAIL_ROOT/ar07.log" 2>&1 &
+P4=$!
+sleep 3
+if kill -0 "$P4" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ a directory named *.md in the inbox does not wake the poller\n'
+  kill "$P4" 2>/dev/null; wait "$P4" 2>/dev/null
+else
+  FAIL=$((FAIL+1)); FAILURES+=("poller woke/exited on a non-regular *.md entry (AR-07 regression)")
+  printf '  ✖ poller exited — got fooled by a non-regular *.md entry: %s\n' "$(cat "$AIMAIL_ROOT/ar07.log" 2>/dev/null | head -3)"
+fi
+# ③ the other direction — `deliver` must not choke on the same entry, and a
+#    REAL message sitting alongside it must still be delivered normally.
+printf 'z\n' > "$AIMAIL_ROOT/real.md"
+"$AIMAIL" send --to main --from main --subject "real message beside the phantom" --body-file "$AIMAIL_ROOT/real.md" >/dev/null 2>&1
+accepts "deliver still works with a phantom *.md directory present" -- deliver main
+if grep -q 'real message beside the phantom' "$AIMAIL_ROOT/.out" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ the real message alongside the phantom directory was delivered\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("real message was not delivered alongside a phantom *.md entry")
+  printf '  ✖ real message alongside the phantom was not delivered\n'
+fi
+accepts "ack it" -- ack main --all
+rm -rf "$AIMAIL_ROOT/mail/main/notes.md"
+
 section "role — the handover, and the resume that reads it"
 # ⛔ A seat with no handover resumes BLIND after an account switch. "No role file"
 #    and "an empty handover" must not read the same as "nothing to hand over".

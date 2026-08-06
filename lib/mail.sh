@@ -222,9 +222,18 @@ mail_deliver() {
   # order that survives a drifted stamp: a retraction whose filename was 6h
   # stale once sorted BELOW older mail and was read after the thing it retracted
   # had already been acted on and committed.
+  # ⛔⛔ AR-07 / R-2 — `-type f` here too. This find used to build the queue from
+  #   ANY `*.md` dirent, then skip non-regular ones below via `[[ -f "$f" ]]`
+  #   with no further action — so a directory named `notes.md` or a broken
+  #   symlink stayed in the inbox FOREVER, un-skippable and un-deliverable, and
+  #   (before the matching poller.sh fix) kept the wake predicate permanently
+  #   non-zero. Filtering here means the queue only ever contains what this
+  #   function can actually act on, and the `[[ -f "$f" ]]` below becomes
+  #   defense-in-depth rather than the only thing standing between a stray
+  #   dirent and an unbounded loop.
   while IFS= read -r f; do [[ -n "$f" ]] && queue+=("$f"); done < <(
-    { find "$MAIL_DIR/$seat/unacked" -maxdepth 1 -name '*.md' -printf '%T@\t%p\n' 2>/dev/null
-      find "$MAIL_DIR/$seat"         -maxdepth 1 -name '*.md' -printf '%T@\t%p\n' 2>/dev/null
+    { find "$MAIL_DIR/$seat/unacked" -maxdepth 1 -type f -name '*.md' -printf '%T@\t%p\n' 2>/dev/null
+      find "$MAIL_DIR/$seat"         -maxdepth 1 -type f -name '*.md' -printf '%T@\t%p\n' 2>/dev/null
     } | sort -n | cut -f2-
   )
 

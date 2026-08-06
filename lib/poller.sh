@@ -141,8 +141,15 @@ poller_run() {
     #    arrived. Unacked backlog is not lost: `mail_deliver` re-surfaces it
     #    alongside the next genuine inbox wake (or `aimail deliver` on demand) —
     #    it is simply no longer, by itself, a reason to wake.
+    # ⛔⛔ AR-07 / R-2 — `-type f`, matching what delivery actually treats as a
+    #    message (`mail_deliver` skips non-regular entries via `[[ -f "$f" ]]`).
+    #    Without this, a directory named `notes.md`, a broken symlink, or any
+    #    other non-regular `*.md` entry is counted as "pending" here forever,
+    #    while delivery silently skips it and removes nothing — a permanent,
+    #    unclearable wake loop with no verb that can fix it, because the two
+    #    predicates disagreed about what a message IS.
     local pending
-    pending=$( find "$MAIL_DIR/$seat" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l )
+    pending=$( find "$MAIL_DIR/$seat" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l )
     if (( pending > 0 )); then
       echo "WAKE=mail: $pending message(s) for '$seat'."
       mail_deliver "$seat" "$maxb"
