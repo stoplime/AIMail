@@ -312,6 +312,23 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("stop_guard selftest exit=$SG_RC")
   printf '  ✖ stop_guard selftest exited %s — its arms did not run to completion\n' "$SG_RC"
 fi
+# WHY the DECISIONS are asserted and not just the count: a count catches an arm that
+# VANISHES, and nothing else. An arm that still prints ✔ while asserting nothing walks
+# straight through it (verified: hollowing _arm's failure branch leaves rc=0, count=5,
+# suite green). Each ✔ line carries the decision the arm actually OBSERVED, so requiring
+# all five distinct decisions also catches the case the suite really exists for —
+# stop_guard's BEHAVIOUR regressing. If it stopped blocking, ARM 1 would report an
+# allow-* decision and this fires even though the count is still 5.
+# ⛔ The remaining escape is a hollow branch that prints a hardcoded CORRECT string.
+#   That is deliberate falsification, not rot, and no in-suite check can distinguish it.
+for _d in BLOCK-no-poller allow-poller-armed allow-exempt allow-disarmed allow-unmapped; do
+  if printf '%s\n' "$SG" | grep -qF "decision=$_d"; then
+    PASS=$((PASS+1)); printf '  ✔ stop_guard observed decision=%s\n' "$_d"
+  else
+    FAIL=$((FAIL+1)); FAILURES+=("stop_guard missing decision=$_d")
+    printf '  ✖ stop_guard never observed decision=%s — an arm is gone or its behaviour changed\n' "$_d"
+  fi
+done
 if [[ $SG_ARMS -eq $SG_EXPECTED_ARMS ]]; then
   PASS=$((PASS+1)); printf '  ✔ stop_guard reported all %s arms\n' "$SG_EXPECTED_ARMS"
 else
