@@ -369,6 +369,58 @@ if ! find "$AIMAIL_ROOT/mail/oddball" -name 'j.md' | grep -q .; then
   PASS=$((PASS+1)); printf '  ✔ dot-directory contents were NOT imported\n'
 else FAIL=$((FAIL+1)); FAILURES+=("dot-dir imported"); printf '  ✖ dot-directory contents were imported\n'; fi
 
+section "migrate — AR-16: a dot-path SOURCE must not lose its whole archive"
+# ⛔⛔ THE DEFECT: the archive loop's `-not -path '*/.*'` matches the WHOLE path
+#   find was given, including the CALLER's own $src prefix — so migrating
+#   FROM a dot-path (a real predecessor mailbox commonly lives under
+#   ~/.claude/...) excluded EVERY file, not just tooling directories. Prove it
+#   with the literal shape: a source nested under a dot-path.
+DOTSRC="$AIMAIL_ROOT/.hidden/oldbox"
+mkdir -p "$DOTSRC/dotseat/archive"
+printf 'old mail from a dot-path source\n' > "$DOTSRC/dotseat/archive/msg1.md"
+accepts "migrate from a dot-path source" -- migrate "$DOTSRC"
+if find "$AIMAIL_ROOT/mail/dotseat" -name '*.md' 2>/dev/null | grep -q .; then
+  PASS=$((PASS+1)); printf '  ✔ the archive imported despite the source living under a dot-path\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-16: migrate from a dot-path source imported nothing")
+  printf '  ✖ AR-16: migrate from a dot-path source imported NOTHING — the whole archive was lost\n'
+fi
+
+section "migrate — AR-15: the reconciliation must be FALSIFIABLE, not just agree with itself"
+# ⛔⛔ THE DEFECT: the old check compared the numerator (the WHOLE target tree)
+#   against a denominator (discovered seats only, excluding `*/_*`) computed by
+#   a DIFFERENT rule — so a target that already held other mail could make a
+#   real partial copy read as "✔ complete", the review's own "12 of 5" shape.
+#   Force a REAL cp failure (a read-only destination shard) — not a stub —
+#   with unrelated mail ALREADY in the target, which is exactly the condition
+#   that made the old check blind to it.
+accepts "register the pre-existing seat" -- seat add unrelated-preexisting "pre-existing, unrelated"
+mkdir -p "$AIMAIL_ROOT/mail/unrelated-preexisting/archive/2026-01"
+for _n in 1 2 3 4; do printf 'pre-existing, unrelated to this migration\n' \
+  > "$AIMAIL_ROOT/mail/unrelated-preexisting/archive/2026-01/pre$_n.md"; done
+FAILSRC="$AIMAIL_ROOT/failbox"
+mkdir -p "$FAILSRC/failseat/archive"
+printf 'msg one\n' > "$FAILSRC/failseat/archive/2026-01-msg1.md"
+touch -d '2026-01-15' "$FAILSRC/failseat/archive/2026-01-msg1.md"
+printf 'msg two\n' > "$FAILSRC/failseat/archive/2026-02-msg2.md"
+touch -d '2026-02-15' "$FAILSRC/failseat/archive/2026-02-msg2.md"
+mkdir -p "$AIMAIL_ROOT/mail/failseat/archive/2026-02"
+chmod 555 "$AIMAIL_ROOT/mail/failseat/archive/2026-02"
+"$AIMAIL" migrate "$FAILSRC" >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"
+chmod 755 "$AIMAIL_ROOT/mail/failseat/archive/2026-02" 2>/dev/null
+if grep -q 'RECONCILIATION FAILED' "$AIMAIL_ROOT/.out" "$AIMAIL_ROOT/.err" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ a real, forced partial copy is reported as a RECONCILIATION FAILURE\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-15: a real partial copy was NOT reported as a reconciliation failure")
+  printf '  ✖ AR-15: a real, forced partial copy did NOT trigger a reconciliation failure\n'
+fi
+if grep -qE '✔.*(complete|reconciled)' "$AIMAIL_ROOT/.out" 2>/dev/null; then
+  FAIL=$((FAIL+1)); FAILURES+=("AR-15: a success line was printed despite the forced partial copy")
+  printf '  ✖ AR-15: a success line was ALSO printed — false success alongside the failure\n'
+else
+  PASS=$((PASS+1)); printf '  ✔ no success line was printed for the seat with the forced failure\n'
+fi
+
 section "stop hook — five arms, each asserting its logged DECISION"
 # ⚠ Run as part of the suite, not as a separate manual step. The first version of
 #   this selftest lived outside the suite, and its two "allow" arms passed while

@@ -31,6 +31,47 @@ _is_not_mail() {
   return 1
 }
 
+# _archive_files <seat-dir> — every archived *.md under a seat, at depth >= 2
+# (i.e. inside a subdirectory — `archive/`, `_archive/`, anything else — never
+# a file sitting directly in the seat root, which is a live inbox message and
+# belongs to the SEPARATE inbox loop).
+#
+# ⛔⛔ AR-16 — this used to be `find "$dir" -mindepth 2 -name '*.md' -not -path
+#   '*/.*'`. `-path` matches the WHOLE path string find was given, including
+#   the CALLER's own `$src` prefix — so migrating FROM a dot-path (a real
+#   predecessor mailbox commonly lives under `~/.claude/...`) matched `*/.*`
+#   on every single file and excluded the entire archive. The remedy the tool
+#   printed on failure — "re-run, it resumes" — could never work either: an
+#   empty result looks identical to "already imported", so nothing about a
+#   re-run would change.
+# ⇒ Prune dot-DIRECTORIES by NAME (`-type d -name '.*' -prune`), never by
+#   PATH — a name test only ever looks at the current entry's basename, so it
+#   cannot be defeated by anything above it in the path, dot or not.
+# ⚠ NOT `-mindepth 2` in the same find call: GNU find suppresses evaluation
+#   of EVERY test — including `-prune` — for entries shallower than mindepth,
+#   so `-prune` never gets to fire on a depth-1 dot-directory and find walks
+#   straight into it anyway (measured: a `.pytest_cache/` at depth 1 survived
+#   `-mindepth 2 … -prune` intact, and a file inside it at depth 2 leaked
+#   through). The depth-2 requirement is therefore enforced separately, on the
+#   caller's side, against the path RELATIVE TO THIS SEAT — never against the
+#   source root, for the same reason `-path` itself was unsafe above.
+_archive_files() {
+  local dir="$1" f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    local rel="${f#"$dir"/}"
+    [[ "$rel" == */* ]] || continue   # depth 1 = live inbox, not archive
+    printf '%s\n' "$f"
+  done < <(find "$dir" -type d -name '.*' -prune -o -type f -name '*.md' -print 2>/dev/null)
+}
+
+# _all_seat_files <seat-dir> — every *.md this seat has, any depth, dot-pruned.
+# The reconciliation's SOURCE count (AR-15, below): what the archive loop AND
+# the live-inbox loop TOGETHER are responsible for accounting for.
+_all_seat_files() {
+  find "$1" -type d -name '.*' -prune -o -type f -name '*.md' -print 2>/dev/null
+}
+
 # _shard_for <file> — month directory from the file's MTIME.
 # ⚠ `mv`/`cp -p` preserve mtime, so an archived message's mtime remains its
 #   WRITE time. That is the correct key: sharding by import date would file five
@@ -109,12 +150,21 @@ migrate_run() {
 
   # ─── Import ────────────────────────────────────────────────────────────────
   echo
-  printf '%-20s %9s %9s %9s %9s\n' SEAT ARCHIVED INBOX ROLES SKIPPED
-  printf '%.0s─' {1..62}; echo
+  printf '%-20s %9s %9s %9s %9s %9s\n' SEAT ARCHIVED INBOX ROLES SKIPPED FAILED
+  printf '%.0s─' {1..72}; echo
 
-  local t_arch=0 t_inbox=0 t_roles=0 t_skip=0
+  local t_arch=0 t_inbox=0 t_roles=0 t_skip=0 t_fail=0
+  declare -A _ACCT=()   # AR-15 — per-seat "files this run successfully accounted for"
   for seat in "${found[@]}"; do
-    local a=0 i=0 r=0 s=0 f base dest
+    # ⭐ AR-15 — `fail` is its OWN counter, never folded into `s`. A file that
+    #   is correctly recognised as not-mail, or already imported (same name +
+    #   size), is "skipped" in the sense that nothing more needs to happen to
+    #   it — it IS accounted for. A file whose `cp` genuinely failed is NOT:
+    #   it is neither in the target nor correctly excluded, so it must NOT
+    #   count toward "accounted for" below, or the reconciliation could never
+    #   detect a real copy failure — exactly the falsifiability the review
+    #   asked for, proven by forcing one (see the test for this arm).
+    local a=0 i=0 r=0 s=0 fail=0 f base dest
 
     # Archive → month shards, keyed on mtime.
     # ⛔⛔ TRAVERSE EVERY SUBDIRECTORY, NOT JUST `archive/`. The first version read
@@ -140,8 +190,8 @@ migrate_run() {
       fi
       if (( dry )); then a=$((a+1)); continue; fi
       mkdir -p "$(dirname "$dest")"
-      cp -p -- "$f" "$dest" && a=$((a+1)) || s=$((s+1))
-    done < <(find "$src/$seat" -mindepth 2 -name '*.md' -not -path '*/.*' 2>/dev/null)
+      cp -p -- "$f" "$dest" && a=$((a+1)) || fail=$((fail+1))
+    done < <(_archive_files "$src/$seat")
 
     # Live inbox → inbox (still undelivered).
     while IFS= read -r f; do
@@ -158,49 +208,61 @@ migrate_run() {
       dest="$MAIL_DIR/$seat/$base"
       [[ -f "$dest" ]] && { s=$((s+1)); continue; }
       if (( dry )); then i=$((i+1)); continue; fi
-      cp -p -- "$f" "$dest" && i=$((i+1)) || s=$((s+1))
+      cp -p -- "$f" "$dest" && i=$((i+1)) || fail=$((fail+1))
     done < <(find "$src/$seat" -maxdepth 1 -name '*.md' 2>/dev/null)
 
-    printf '%-20s %9s %9s %9s %9s\n' "$seat" "$a" "$i" "$r" "$s"
-    t_arch=$((t_arch+a)); t_inbox=$((t_inbox+i)); t_roles=$((t_roles+r)); t_skip=$((t_skip+s))
+    printf '%-20s %9s %9s %9s %9s %9s\n' "$seat" "$a" "$i" "$r" "$s" "$fail"
+    t_arch=$((t_arch+a)); t_inbox=$((t_inbox+i)); t_roles=$((t_roles+r)); t_skip=$((t_skip+s)); t_fail=$((t_fail+fail))
+    _ACCT[$seat]=$(( a + i + r + s ))   # NOT +fail — a failed cp is not accounted for
   done
 
-  printf '%.0s─' {1..62}; echo
-  printf '%-20s %9s %9s %9s %9s\n' TOTAL "$t_arch" "$t_inbox" "$t_roles" "$t_skip"
+  printf '%.0s─' {1..72}; echo
+  printf '%-20s %9s %9s %9s %9s %9s\n' TOTAL "$t_arch" "$t_inbox" "$t_roles" "$t_skip" "$t_fail"
   echo
 
-  # ─── Verify against the source, with denominators ──────────────────────────
-  # ⚠ A migration that reports only what it wrote cannot detect what it missed.
-  #   Count the SOURCE independently and compare — "0 of 0" and "0 of 13,327"
-  #   look identical in a summary and mean opposite things.
-  # ⛔ THE DENOMINATOR MUST COUNT ONLY WHAT THIS TOOL CLAIMS TO MIGRATE. The first
-  #    version counted every `*.md` under the source root, which swept in the
-  #    mailbox's own top-level documents (README, the design doc, a cold-start
-  #    manual) — files that are NOT mail and are correctly not imported. It then
-  #    reported them as unaccounted-for, i.e. **the instrument manufactured its
-  #    own shortfall and blamed the migration.** A denominator that includes
-  #    things the numerator can never contain always reads as data loss.
-  local src_total=0 dst_total seat_n
+  # ─── Verify against the source, PER SEAT, falsifiably (AR-15) ──────────────
+  # ⛔⛔ THE OLD CHECK COMPARED TWO MISMATCHED NUMBERS. The numerator counted the
+  #   WHOLE TARGET TREE (`find "$MAIL_DIR" -name '*.md'`) — every seat ever
+  #   registered in aimail, not just the ones THIS run discovered — so any
+  #   pre-existing mail (a prior migration, ordinary live use) inflated it for
+  #   free. The denominator counted only DISCOVERED seats and excluded
+  #   `*/_*` — the exact directory class the archive-traversal fix a few lines
+  #   above exists to include, so a file that really was imported from an
+  #   `_archive/`-style directory was invisible to its own denominator. Two
+  #   independently wrong numbers can still agree by accident, which is worse
+  #   than either being wrong alone: the review's own example was
+  #   "✔ complete: 12 of 5" having copied 3 of 5 — a target that already held
+  #   other mail made a real 3-of-5 shortfall read as 240% complete.
+  # ⇒ Compare PER SEAT, using the SAME traversal rule as the import loops
+  #   themselves (`_all_seat_files` — the identical dot-pruning `_archive_files`
+  #   uses, just without the depth restriction), against the count those SAME
+  #   loops already tracked as "looked at" (`_ACCT`). Two numbers computed by
+  #   the same rule cannot disagree by construction; if they still don't match,
+  #   that is a REAL file this run never touched, not an artifact of counting
+  #   two different things.
+  echo
+  local all_reconciled=1 seat_n seat_src_n seat_acct_n
   for seat_n in "${found[@]}"; do
-    src_total=$(( src_total + $(find "$src/$seat_n" -name '*.md' \
-      -not -name 'ROLE.md' -not -name 'BOOTSTRAP_PROMPT.md' -not -path '*/_*' 2>/dev/null | wc -l) ))
+    seat_src_n=$(_all_seat_files "$src/$seat_n" | wc -l)
+    seat_acct_n="${_ACCT[$seat_n]:-0}"
+    if (( seat_acct_n < seat_src_n )); then
+      all_reconciled=0
+      warn "RECONCILIATION FAILED for '$seat_n': accounted for $seat_acct_n of $seat_src_n source message(s) — $(( seat_src_n - seat_acct_n )) UNEXPLAINED"
+    fi
   done
-  dst_total=$(find "$MAIL_DIR" -name '*.md' 2>/dev/null | wc -l)
-  info "source messages in the ${#found[@]} discovered seat(s): $src_total"
-  info "target messages now present:                            $dst_total"
   if (( dry )); then
     warn "DRY RUN — nothing was written. Re-run without --dry-run to import."
-  elif (( dst_total >= src_total )); then
-    ok "migration complete: $dst_total of $src_total source message(s) present"
+  elif (( all_reconciled )); then
+    ok "migration reconciled: every discovered seat accounts for 100% of its source message(s)"
   else
     # ⚠ A LIVE SOURCE RACES WITH THE COPY, and that is the normal case, not a
     #   fault: a mailbox being migrated is usually still receiving. Mail that
-    #   lands after the loop has passed its seat is in the source and not yet in
-    #   the target. Re-running picks it up, so the correct cutover is: migrate
-    #   once now, then migrate again at the moment of the switch.
-    warn "target has $dst_total of $src_total — $(( src_total - dst_total )) not yet copied"
-    warn "If the source is LIVE this is expected: mail arriving during the copy is"
-    warn "missed by one pass. Re-run — the import is idempotent and resumes."
+    #   lands after the loop has passed its seat is in the source and not yet
+    #   accounted for. Re-running picks it up — migrate once now, then again
+    #   at the moment of the actual cutover.
+    warn "One or more seats above did not reconcile (see the FAILED line(s))."
+    warn "If the source is LIVE this can be expected — re-run; the import is idempotent."
+    warn "If it persists after a re-run against a QUIESCENT source, investigate that seat."
   fi
   info ""
   info "The source mailbox is UNCHANGED and still running. Nothing was moved."
