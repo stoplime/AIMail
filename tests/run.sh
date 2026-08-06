@@ -531,6 +531,76 @@ else
   printf '  ✖ poller did not wake at the ramp\n'
 fi
 
+section "poller — AR-05/AR-06: ramp self-detected while parked, and no refire on restart"
+# ⛔⛔ THE DEFECT: the throttle branch `continue`d unconditionally, so a poller
+#   that was ALREADY parked could never itself notice its own ramp_at had
+#   passed — only a separate `budget ramp` CLI call (or a working `autopilot`
+#   cron, which AR-05b found was independently dead) could lift it. This is an
+#   OBSERVED-PROCESS test, not a stubbed heartbeat read, because the review's
+#   own finding on this exact class was that a green suite can certify a hollow
+#   or fail-open guard — see code-review's stop_guard.sh finding.
+"$AIMAIL" budget park "AR-05/06 direct test" >/dev/null 2>&1
+# Ramp time already in the past, and NO external `budget ramp` call anywhere
+# in this arm — if the poller cannot detect this itself, it parks forever.
+printf 'at\t%s\n' "$(( $(date +%s) - 5 ))" > "$AIMAIL_ROOT/state/ramp_at"
+"$AIMAIL" poll main > "$AIMAIL_ROOT/ar0506.log" 2>&1 &
+P1=$!
+sleep 3
+if ! kill -0 "$P1" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ poller woke ITSELF on an overdue ramp_at while still throttled — no external budget-ramp call\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("poller did not self-detect an overdue ramp while parked (AR-05a)")
+  printf '  ✖ poller did not self-detect an overdue ramp while parked — still alive after 3s\n'
+  kill "$P1" 2>/dev/null
+fi
+if grep -q 'WAKE=ramp' "$AIMAIL_ROOT/ar0506.log" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ it woke for the right reason (ramp, not a coincidental mail delivery)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("poller exited but not with WAKE=ramp")
+  printf '  ✖ poller exited but the log does not show WAKE=ramp\n'
+fi
+# AR-06a — the self-detection must ALSO clear the throttle and push ramp_at
+# forward, not merely notice it. Otherwise a seat that re-arms right after
+# waking hits the SAME stale timestamp and refires instantly: a wake loop of
+# full session turns, which is worse than the original "never wakes" bug.
+if [[ ! -f "$AIMAIL_ROOT/state/throttled" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ the throttle was actually cleared by the self-detected ramp, not just logged\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("self-detected ramp fired but left the throttle in place")
+  printf '  ✖ throttle still present after the poller reported WAKE=ramp\n'
+fi
+"$AIMAIL" poll main > "$AIMAIL_ROOT/ar0506b.log" 2>&1 &
+P2=$!
+sleep 3
+if kill -0 "$P2" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ restarting right after does NOT instantly refire — ramp_at was advanced (AR-06a)\n'
+  kill "$P2" 2>/dev/null; wait "$P2" 2>/dev/null
+else
+  FAIL=$((FAIL+1)); FAILURES+=("restart re-fired immediately — ramp_at was not advanced (AR-06a wake-loop regression)")
+  printf '  ✖ restart re-fired immediately on the same stale ramp_at\n'
+fi
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/ramp_at"
+
+section "poller — AR-06b: un-acked mail is not, by itself, a wake reason"
+# ⛔ THE DEFECT: the wake predicate counted `unacked/` as well as the live
+#   inbox, so a seat that re-armed before acking woke instantly on the exact
+#   message it had just finished reading. Deliver one message, deliberately
+#   do NOT ack it, then confirm a fresh poller does not instantly exit on it.
+printf 'y\n' > "$AIMAIL_ROOT/unacked_test.md"
+"$AIMAIL" send --to main --from main --subject "unacked probe" --body-file "$AIMAIL_ROOT/unacked_test.md" >/dev/null 2>&1
+accepts "deliver it (moves inbox -> unacked)" -- deliver main
+"$AIMAIL" poll main > "$AIMAIL_ROOT/ar06b.log" 2>&1 &
+P3=$!
+sleep 3
+if kill -0 "$P3" 2>/dev/null; then
+  PASS=$((PASS+1)); printf '  ✔ un-acked mail alone does not wake a freshly-armed poller\n'
+  kill "$P3" 2>/dev/null; wait "$P3" 2>/dev/null
+else
+  FAIL=$((FAIL+1)); FAILURES+=("poller instantly woke on un-acked mail alone (AR-06b regression)")
+  printf '  ✖ poller exited instantly — un-acked mail is still being counted as pending\n'
+fi
+accepts "ack the probe message" -- ack main --all
+
 section "role — the handover, and the resume that reads it"
 # ⛔ A seat with no handover resumes BLIND after an account switch. "No role file"
 #    and "an empty handover" must not read the same as "nothing to hand over".
@@ -542,7 +612,16 @@ accepts "show it back"                          -- role show main
 accepts "role path prints a location"           -- role path main
 # ⚠ The handover must NOT be reachable by the mail glob — that was the whole
 #   reason it moved out of the inbox.
-if ! find "$AIMAIL_ROOT/mail/main" -maxdepth 1 -name '*.md' | xargs -r grep -l 'DONE: nothing yet' >/dev/null 2>&1; then
+# ⛔ NOT `find | xargs -r grep -l ... >/dev/null 2>&1`. `xargs -r` (no-run-if-empty)
+#   exits 0 when `find` matches NOTHING — indistinguishable from grep exiting 0
+#   because it found a match. An empty, healthy inbox and a leaking one then
+#   read as the SAME "reachable by the glob" failure. (Found it dormant: this
+#   fired the first time the live inbox happened to be genuinely empty at this
+#   checkpoint — reproduced directly against `find /empty/dir | xargs -r grep`,
+#   exit 0 either way.) Count matches explicitly instead.
+HANDOVER_LEAKS=$(find "$AIMAIL_ROOT/mail/main" -maxdepth 1 -type f -name '*.md' \
+  -exec grep -l 'DONE: nothing yet' {} \; 2>/dev/null | wc -l)
+if (( HANDOVER_LEAKS == 0 )); then
   PASS=$((PASS+1)); printf '  ✔ the handover is not in the inbox, so it can never be delivered as mail\n'
 else
   FAIL=$((FAIL+1)); FAILURES+=("handover landed where mail is globbed")

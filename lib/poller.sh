@@ -97,26 +97,52 @@ poller_run() {
     #    busy). Without this, `poller_state` had only a staling `beat` to judge
     #    health by, and a correctly parked poller reads WEDGED after `limit`
     #    seconds — the dashboard then tells a human to kill a healthy process.
+    # ⛔⛔ AR-05a — the ramp check used to live AFTER this branch, which
+    #    `continue`d unconditionally while throttled — making it UNREACHABLE for
+    #    the entire duration of a park. A stale `ramp_at` could never be noticed
+    #    by the poller itself; only a separate `autopilot` cron could lift the
+    #    throttle, and AR-05b found THAT path dead in the common case (see
+    #    `block_end_effective` in budget.sh). Nesting the ramp check INSIDE the
+    #    park branch, evaluated before the `continue`, makes it reachable exactly
+    #    when it matters (while parked) — NOT unconditionally on every loop tick,
+    #    which would misfire: `ramp_at` persists as a recurring 20-minute
+    #    safety-net checkpoint long after any given park has ended (see
+    #    `budget_ramp`), so checking it outside the `throttled` guard would wake
+    #    every armed, perfectly healthy poller every ~20 minutes forever.
     if [[ -f "$STATE_DIR/throttled" ]]; then
+      if [[ -f "$STATE_DIR/ramp_at" ]]; then
+        local rat; rat="$(awk -F'\t' '$1=="at"{print $2}' "$STATE_DIR/ramp_at" 2>/dev/null)"
+        if [[ "$rat" =~ ^[0-9]+$ ]] && (( $(now_epoch) >= rat )); then
+          echo "WAKE=ramp: the parked window ended at $(date -d "@$rat" '+%F %H:%M')."
+          echo "  ⚠ This is a CONDITION, not a permission. It reports that a window rolled;"
+          echo "    it cannot see a weekly cap or a human-imposed hold, and it does not lift one."
+          # ⭐ AR-06a — lift the throttle and push ramp_at forward BEFORE exiting,
+          #    by calling budget_ramp() itself — the SAME function a human or
+          #    autopilot calls — rather than re-deriving "clear + advance" a
+          #    second, possibly-diverging way. Without this, a poller restarted
+          #    right after firing sees the SAME already-past ramp_at and fires
+          #    again instantly: an infinite loop of full session turns, not a
+          #    park. Any seat's poller noticing this independently also makes
+          #    the un-park self-healing rather than dependent on one cron.
+          source "$AIMAIL_LIB/budget.sh"
+          budget_ramp >/dev/null 2>&1
+          hb_exit "$seat" ramp; _rearm_notice "$seat"; return 0
+        fi
+      fi
       hb_park "$seat"
       sleep "$interval"; continue
     fi
 
-    # ─── Ramp: the throttle's own end condition ──────────────────────────────
-    if [[ -f "$STATE_DIR/ramp_at" ]]; then
-      local rat; rat="$(awk -F'\t' '$1=="at"{print $2}' "$STATE_DIR/ramp_at" 2>/dev/null)"
-      if [[ "$rat" =~ ^[0-9]+$ ]] && (( $(now_epoch) >= rat )); then
-        echo "WAKE=ramp: the parked window ended at $(date -d "@$rat" '+%F %H:%M')."
-        echo "  ⚠ This is a CONDITION, not a permission. It reports that a window rolled;"
-        echo "    it cannot see a weekly cap or a human-imposed hold, and it does not lift one."
-        hb_exit "$seat" ramp; _rearm_notice "$seat"; return 0
-      fi
-    fi
-
     # ─── Mail: the primary wake ──────────────────────────────────────────────
+    # ⛔ AR-06b — count the INBOX only, never `unacked/`. Counting unacked mail
+    #    here meant a seat that re-armed without acking woke instantly on the
+    #    exact message it had just finished reading — an unbounded loop keyed on
+    #    the seat's own unfinished bookkeeping rather than on anything new having
+    #    arrived. Unacked backlog is not lost: `mail_deliver` re-surfaces it
+    #    alongside the next genuine inbox wake (or `aimail deliver` on demand) —
+    #    it is simply no longer, by itself, a reason to wake.
     local pending
-    pending=$( { find "$MAIL_DIR/$seat"         -maxdepth 1 -name '*.md' 2>/dev/null
-                 find "$MAIL_DIR/$seat/unacked" -maxdepth 1 -name '*.md' 2>/dev/null; } | wc -l )
+    pending=$( find "$MAIL_DIR/$seat" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l )
     if (( pending > 0 )); then
       echo "WAKE=mail: $pending message(s) for '$seat'."
       mail_deliver "$seat" "$maxb"
