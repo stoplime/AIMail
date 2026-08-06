@@ -793,6 +793,69 @@ if grep -q 'YOUR NEXT THREE COMMANDS' "$AIMAIL_ROOT/.out"; then
   PASS=$((PASS+1)); printf '  ✔ resume names the exact commands that make a seat reachable\n'
 else FAIL=$((FAIL+1)); FAILURES+=("resume did not print next steps"); printf '  ✖ resume did not print next steps\n'; fi
 
+section "fleet sweep — AR-20: an ACTIVE alert, not a dashboard nobody calls"
+# ⛔ THE DEFECT: `aimail fleet` was a correct, read-only dashboard that nobody
+#   is obligated to run — a CRASHED seat sits invisible until a human happens
+#   to look. `sweep` is the active half: it must actually mail a supervisor,
+#   unprompted, and it must NOT spam that same mail every time it is re-run
+#   for the SAME ongoing crash.
+accepts "register the sweep supervisor" -- seat add sweepvisor "Supervisor for this arm"
+accepts "register a seat that will crash" -- seat add crashy "will crash"
+mkdir -p "$AIMAIL_ROOT/state/poller"
+printf 'pid\t999999\nppid\t1\nstarted\t%s\nbeat\t%s\n' "$(date +%s)" "$(date +%s)" \
+  > "$AIMAIL_ROOT/state/poller/crashy.hb"
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep runs" -- fleet sweep
+SWEEP1=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( SWEEP1 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ a CRASHED seat generated exactly one unprompted alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("sweep alert count after 1st run: got $SWEEP1 want 1")
+  printf '  ✖ sweep alert count after 1st run: got %s, want 1\n' "$SWEEP1"
+fi
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep re-run on the SAME ongoing crash" -- fleet sweep
+SWEEP2=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( SWEEP2 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ re-sweeping the SAME ongoing crash did not send a second alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("sweep re-alerted an already-reported crash: now $SWEEP2 messages")
+  printf '  ✖ sweep re-alerted an already-reported crash — now %s message(s)\n' "$SWEEP2"
+fi
+# ③ the other direction — a NEW crash (different pid/beat) must still alert,
+#    proving the dedup is keyed on the EVENT, not on "this seat, ever again".
+printf 'pid\t888888\nppid\t1\nstarted\t%s\nbeat\t%s\n' "$(date +%s)" "$(date +%s)" \
+  > "$AIMAIL_ROOT/state/poller/crashy.hb"
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep on a NEW, distinct crash" -- fleet sweep
+SWEEP3=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( SWEEP3 == 2 )); then
+  PASS=$((PASS+1)); printf '  ✔ a genuinely NEW crash (different pid/beat) alerted again (%s total)\n' "$SWEEP3"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("a new crash did not generate a new alert: got $SWEEP3 want 2")
+  printf '  ✖ a new crash did not generate a new alert: got %s, want 2\n' "$SWEEP3"
+fi
+rm -f "$AIMAIL_ROOT/state/poller/crashy.hb"
+
+section "whoami — AR-21: a fresh session with no seat name yet"
+# ⛔ THE DEFECT: `resume <seat>` requires the caller to already know its own
+#   name. `whoami` closes the actual cold-start gap by reusing the SAME
+#   session->seat mapping the stop-hook guard already maintains.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
+unmeasurable_test "no session id in the environment" "no session id" -- whoami
+export CLAUDE_CODE_SESSION_ID=selftest-whoami-sid
+unmeasurable_test "a session id that was never registered" "not registered to any seat" -- whoami
+accepts "register a seat for whoami to resolve" -- seat add whoseat "test"
+printf '# handover\nDONE: whoami test.\n' > "$AIMAIL_ROOT/wh.md"
+accepts "write it a handover" -- role write whoseat "$AIMAIL_ROOT/wh.md"
+mkdir -p "$AIMAIL_ROOT/state/stopguard"
+printf 'whoseat' > "$AIMAIL_ROOT/state/stopguard/session.selftest-whoami-sid"
+accepts "whoami resolves a registered session and resumes it" -- whoami
+if grep -q "registered as seat 'whoseat'" "$AIMAIL_ROOT/.out" && grep -q 'RESUME: whoseat' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ whoami identified the seat AND printed its resume, in one command\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("whoami did not both identify and resume the seat")
+  printf '  ✖ whoami did not both identify and resume the seat\n'
+fi
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
+
 section "doctor"
 accepts "doctor runs"                          -- doctor
 

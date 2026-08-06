@@ -237,3 +237,58 @@ HOW TO READ THIS — the distinction that matters most:
 EOF
   return 0
 }
+
+# ─── sweep — AR-20: an ACTIVE loop, not a dashboard nobody calls ──────────────
+# ⛔⛔ THE DEFECT: `aimail fleet` is a complete, correct dashboard, but nothing
+#   calls it unless a human already suspects trouble — a CRASHED seat is
+#   invisible until someone looks. Five watchdog loops in the predecessor
+#   became ZERO here; the README calls that "subsumed by aimail fleet", but a
+#   read-only report is not a sweep. This is the active half: run it from
+#   cron (same shape as budget_autopilot) and it tells someone, unprompted,
+#   instead of waiting to be asked.
+#     */5 * * * * /path/to/bin/aimail fleet sweep >> ~/.aimail/state/sweep.log 2>&1
+SWEEP_ALERT_DIR() { echo "$STATE_DIR/sweep_alerted"; }
+fleet_sweep() {
+  local supervisor="${AIMAIL_SUPERVISOR:-assistant}"
+  mkdir -p "$(SWEEP_ALERT_DIR)"
+  local -a seats=()
+  while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done < <(seat_names)
+  (( ${#seats[@]} == 0 )) && unmeasurable "no seats registered — there is nothing to sweep" \
+    "This is an empty address space, not a healthy fleet."
+
+  local seat st detail marker key n_alerts=0 n_checked=0
+  for seat in "${seats[@]}"; do
+    [[ "$(seat_field "$seat" 2)" == "retired" ]] && continue
+    n_checked=$((n_checked+1))
+    IFS=$'\t' read -r st detail < <(poller_state "$seat")
+    case "$st" in
+      CRASHED|WEDGED) : ;;   # the two states `aimail fleet` itself marks ⛔ — needs a human
+      *) continue ;;
+    esac
+    # ⭐ DEDUP ON THE UNDERLYING EVENT, NOT ON "still bad". Keyed on the
+    #   (pid, beat) this specific reading was computed from: the SAME ongoing
+    #   crash re-sweeps silently — no repeat alert every 5 minutes for one
+    #   incident — but a NEW crash, even of the same seat, even reading as the
+    #   same state NAME, gets its own alert, because its (pid,beat) pair
+    #   differs from the last one that was reported.
+    marker="$(SWEEP_ALERT_DIR)/$seat"
+    key="$st:$(hb_read "$seat" pid 2>/dev/null || echo '?'):$(hb_read "$seat" beat 2>/dev/null || echo '?')"
+    [[ "$(cat "$marker" 2>/dev/null)" == "$key" ]] && continue
+    if seat_exists "$supervisor"; then
+      local body; body="$(mktemp "${AIMAIL_ROOT}/tmp/sweep.XXXXXX")"
+      { printf '# 🔴 SWEEP: %s is %s\n\n%s\n\n' "$seat" "$st" "$detail"
+        printf 'No human asked for this — the sweep found it unprompted.\n'
+        printf 'Run `aimail fleet %s` to confirm current state before acting.\n' "$seat"
+      } > "$body"
+      if mail_send --to "$supervisor" --from "$supervisor" \
+           --subject "SWEEP: $seat is $st" --body-file "$body" >/dev/null 2>&1; then
+        printf '%s' "$key" > "$marker"; n_alerts=$((n_alerts+1))
+      fi
+      rm -f "$body"
+    else
+      warn "sweep: '$seat' is $st but supervisor '$supervisor' is not registered — no alert sent"
+    fi
+  done
+  info "sweep: checked $n_checked seat(s), $n_alerts new alert(s)"
+  return 0
+}

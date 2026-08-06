@@ -177,3 +177,35 @@ role_resume() {
   info "⚠ The account changed, so every pre-switch budget reading describes a window"
   info "  that no longer exists. Get a fresh /usage callout before trusting a level."
 }
+
+# ─── whoami — AR-21: nothing told a fresh session which seat it IS ────────────
+# ⛔⛔ THE DEFECT: `resume <seat>` already existed, but it requires the caller to
+#   ALREADY KNOW its own seat name — which is precisely what a genuinely fresh
+#   session does not have. A session -> seat mapping already exists: the
+#   stop-hook guard's own `register` verb writes one, to decide whose stop to
+#   block. Nothing exposed THAT mapping as an identity lookup, so a fresh
+#   session had no way to ask "who am I" even though the answer was already on
+#   disk. Reuse it rather than inventing a second, competing mapping — two
+#   session->seat records that can drift is worse than one.
+_whoami_sid() { echo "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; }
+role_whoami() {
+  local sid; sid="$(_whoami_sid)"
+  [[ -n "$sid" ]] || unmeasurable "no session id in this environment" \
+    "Checked CLAUDE_CODE_SESSION_ID and CLAUDE_SESSION_ID — both unset." \
+    "Cannot look up a seat without a session id to look it up BY." \
+    "If your principal has already told you which seat you are, skip this:" \
+    "  aimail resume <seat>"
+
+  local f="$STATE_DIR/stopguard/session.$sid"
+  if [[ -f "$f" ]]; then
+    local seat; seat="$(cat "$f")"
+    ok "this session ($sid) is registered as seat '$seat'"
+    role_resume "$seat"
+    return 0
+  fi
+  unmeasurable "this session ($sid) is not registered to any seat yet" \
+    "'No mapping' is not the same claim as 'you are seat X' — do not guess." \
+    "Ask your principal which seat you are, then register AND look up in one step:" \
+    "  bash $AIMAIL_HOME/hooks/stop_guard.sh register <seat>" \
+    "  aimail whoami"
+}

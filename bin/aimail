@@ -48,6 +48,11 @@ POLLING
 FLEET — who is working, who is reachable, who needs a human
   aimail fleet [seat…]                      the dashboard, with a VERDICT per seat
   aimail who                                alias for fleet
+  aimail fleet sweep                        ACTIVE check: mails a supervisor about any
+                                             CRASHED/WEDGED seat, unprompted. Run from cron —
+                                             */5 * * * * aimail fleet sweep >> sweep.log 2>&1
+  aimail whoami                             fresh session, no seat name yet? Looks up THIS
+                                             session's registered seat and resumes it.
 
 ⚠ A poller being down does NOT mean a seat is down. Between a poller firing and
   the seat re-arming, the seat is READING ITS MAIL. `fleet` reports that as
@@ -105,7 +110,9 @@ case "$cmd" in
            source "$_SELF/../lib/poller.sh"; poller_run "$@" ;;
 
   fleet|who)
-           source "$_SELF/../lib/fleet.sh"; fleet_report "$@" ;;
+           source "$_SELF/../lib/fleet.sh"
+           if [[ "${1:-}" == "sweep" ]]; then shift; fleet_sweep "$@"
+           else fleet_report "$@"; fi ;;
   migrate) source "$_SELF/../lib/migrate.sh"; migrate_run "$@" ;;
 
   role)
@@ -128,6 +135,9 @@ case "$cmd" in
       "waiting, and the three commands that make you reachable again."
     source "$_SELF/../lib/role.sh"
     s="$(seat_resolve "$1")" || exit $?; role_resume "$s" ;;
+
+  whoami)
+    source "$_SELF/../lib/role.sh"; role_whoami ;;
 
   budget)
     source "$_SELF/../lib/budget.sh"
