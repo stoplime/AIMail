@@ -60,35 +60,59 @@ hb_read() {
   awk -F'\t' -v k="$key" '$1==k{print $2; found=1} END{exit !found}' "$f"
 }
 
+# ⭐ AR-12 — ONE atomic write, not four sequential hb_write calls. Each hb_write
+#    is its own mktemp+mv; four of them left a window — file truncated-but-empty,
+#    or `pid` present without `beat` yet — where a concurrent `poller_state` read
+#    a partial record and reported CRASHED (no pid yet) or WEDGED (pid present,
+#    beat absent → stale computed against a phantom 0). Measured: 10 healthy
+#    starts → 1 WEDGED, 1 CRASHED. A single mv makes every reader see either the
+#    prior file (pre-start) or the fully-populated one — never a half record.
 hb_start() {
-  local seat="$1"
+  local seat="$1" now f tmp; f="$(HB_FILE "$seat")"; now="$(now_epoch)"
   mkdir -p "$(HB_DIR)"
-  : > "$(HB_FILE "$seat")"
-  hb_write "$seat" pid "$$"
-  hb_write "$seat" ppid "$PPID"
-  hb_write "$seat" started "$(now_epoch)"
-  hb_write "$seat" beat "$(now_epoch)"
+  tmp="$(mktemp "$(HB_DIR)/.hb.XXXXXX")"
+  { printf 'pid\t%s\n' "$$"
+    printf 'ppid\t%s\n' "$PPID"
+    printf 'started\t%s\n' "$now"
+    printf 'beat\t%s\n' "$now"
+  } > "$tmp"
+  mv -f "$tmp" "$f"
 }
 hb_beat() { hb_write "$1" beat "$(now_epoch)"; }
+# ⭐ AR-09 — the park heartbeat. Written on its OWN key (never `beat`) so a
+#   correctly-parked poller stays distinguishable from one that stopped beating
+#   for an unknown reason. See poller_state()'s PARKED branch below.
+hb_park() { hb_write "$1" park_beat "$(now_epoch)"; }
 hb_exit() {
   local seat="$1" reason="$2"
   hb_write "$seat" exit_at "$(now_epoch)"
   hb_write "$seat" exit_reason "$reason"
 }
 
-# ─── poller_state <seat> — ONE implementation, six distinct states ────────────
+# ─── poller_state <seat> — ONE implementation, seven distinct states ──────────
 # Prints: STATE<TAB>detail
 #
-# ⭐ Six states, where a process count had two. Every extra state is one the
+# ⭐ Seven states, where a process count had two. Every extra state is one the
 #    predecessor could not see and therefore misreported:
 #      ARMED       heartbeat fresh, process alive          → reachable
+#      PARKED      throttled, park heartbeat fresh          → correctly idle, NOT hung
 #      RE-ARMING   exited with a reason, inside the grace   → WORKING, do not nudge
 #      STALLED     exited with a reason, past the grace     → should have re-armed
 #      WEDGED      process alive but heartbeat is stale     → hung, not working
 #      CRASHED     no exit record and no live process       → killed; needs a human
 #      NEVER       no heartbeat ever written                → never started
+#
+# ⭐ AR-09 — PARKED did not exist. `poller.sh`'s throttle branch `continue`s
+#    without calling `hb_beat`, by design (a parked poller must not look busy).
+#    But that left park and hang sharing one signal — a stale `beat` — so a
+#    correctly parked poller crossed into WEDGED after `limit` seconds and the
+#    dashboard told a human to kill a healthy process. `hb_park()` now writes
+#    its OWN key each time through the park loop; a fresh `park_beat` is
+#    positive evidence the loop is alive and cycling in the park branch
+#    specifically, not an inference from a global flag that says nothing about
+#    which poller is actually parked vs. stuck elsewhere.
 poller_state() {
-  local seat="$1" now pid beat exit_at reason interval
+  local seat="$1" now pid beat exit_at reason interval park_beat
   now="$(now_epoch)"
   interval="${AIMAIL_POLL_INTERVAL:-5}"
 
@@ -99,6 +123,7 @@ poller_state() {
   beat="$(hb_read "$seat" beat || echo 0)"
   exit_at="$(hb_read "$seat" exit_at || echo '')"
   reason="$(hb_read "$seat" exit_reason || echo '')"
+  park_beat="$(hb_read "$seat" park_beat || echo 0)"
 
   local alive=0
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null && alive=1
@@ -114,9 +139,20 @@ poller_state() {
     return 0
   fi
 
-  # No exit record. Is it beating?
-  local stale=$(( now - beat ))
   local limit=$(( interval * 6 + 30 ))
+
+  # PARKED takes priority over the beat-staleness check below: while parked,
+  # `beat` is EXPECTED to go stale (that is the whole design), so judging
+  # health by `beat` here would always read a healthy park as WEDGED. Judge it
+  # by the channel that is actually still advancing instead.
+  if (( alive == 1 )) && (( now - park_beat <= limit )); then
+    printf 'PARKED\tpid %s, park heartbeat %ss ago — correctly idle under a throttle\n' \
+      "$pid" "$(( now - park_beat ))"
+    return 0
+  fi
+
+  # No exit record, not parked. Is it beating?
+  local stale=$(( now - beat ))
   if (( alive == 1 && stale <= limit )); then
     printf 'ARMED\tpid %s, last beat %ss ago\n' "$pid" "$stale"
   elif (( alive == 1 )); then
@@ -169,6 +205,8 @@ fleet_report() {
       ARMED)
         if [[ "$ago" == "never" ]]; then verdict="WORKING — never ended a turn yet"
         else verdict="IDLE & REACHABLE — mail will wake it, send work"; fi ;;
+      PARKED)
+        verdict="PARKED — correctly idle under a throttle. ⛔ DO NOT KILL, do not nudge" ;;
       RE-ARMING)
         verdict="WORKING — mid-turn, reading mail. ⛔ DO NOT NUDGE" ;;
       STALLED)

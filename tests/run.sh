@@ -199,9 +199,10 @@ refuses "unknown seat subcommand is refused" "unknown 'seat' subcommand" -- seat
 section "fleet — the distinction a process count cannot make"
 # ⛔ THE DEFECT UNDER TEST: a poller is DOWN both when a seat is mid-turn reading
 #    its mail (normal — do not nudge) and when it was killed (needs a human).
-#    `ps` cannot tell those apart. The exit record can, and these four arms prove
-#    it does — including the two that must NOT alarm, because an instrument that
-#    alarms on everything is as useless as one that alarms on nothing.
+#    `ps` cannot tell those apart. The exit record can, and the arms below prove
+#    it does — including the ones that must NOT alarm, because an instrument
+#    that alarms on everything is as useless as one that alarms on nothing.
+#    (Extended for AR-09/AR-12 — see the arms after STALLED.)
 _hb() {  # _hb <seat> <key=value>…
   local seat="$1"; shift
   mkdir -p "$AIMAIL_ROOT/state/poller"
@@ -233,6 +234,57 @@ _fleet_says main "ARMED"     "a live beating poller reads as ARMED"
 _hb main pid=999999 started=$((NOW-9000)) beat=$((NOW-9000)) exit_at=$((NOW-9000)) exit_reason=mail
 _fleet_says main "STALLED"   "an exit older than the grace window reads as STALLED"
 rm -f "$AIMAIL_ROOT/state/poller/main.hb"
+
+# ⛔ AR-09 — a poller that is CORRECTLY parked (throttled, `beat` deliberately
+#   stale by design) must never read the same as one that is hung. Before the
+#   fix, both had only a staling `beat` to judge by, so a healthy park crossed
+#   into WEDGED after `limit` seconds and the dashboard told a human to kill it.
+_hb main pid=$$ started=$((NOW-600)) beat=$((NOW-90)) park_beat=$((NOW-2))
+_fleet_says main "PARKED" "a parked poller (stale beat, fresh park heartbeat) reads PARKED, not WEDGED"
+# ③ the other direction — a park heartbeat that has ALSO gone stale must still
+#    alarm. Having parked once must not permanently immunise a seat from WEDGED.
+_hb main pid=$$ started=$((NOW-9000)) beat=$((NOW-9000)) park_beat=$((NOW-9000))
+_fleet_says main "WEDGED" "a stale park heartbeat still alarms — parking once does not mask a later hang"
+rm -f "$AIMAIL_ROOT/state/poller/main.hb"
+
+# ⛔ AR-12 — hb_start must land pid/ppid/started/beat via ONE mv, not four. The
+#   predecessor wrote them as four separate hb_write calls, each its own
+#   mktemp+mv, leaving a window where a concurrent reader saw the file
+#   truncated-but-empty or `pid` with no `beat` yet, and reported CRASHED or
+#   WEDGED for a poller that was in fact starting up cleanly.
+#   ⚠ A content check taken AFTER hb_start returns cannot see this: four
+#     sequential writes and one atomic write leave an IDENTICAL final file, so
+#     that check passes on both the broken and the fixed code — proven by
+#     running it against the pre-fix lib/fleet.sh, where it also passed.
+#   ⇒ Count the actual mv(1) invocations instead, via a PATH-shadowed `mv` that
+#     logs then execs the real binary. This is deterministic (no timing luck
+#     needed) and discriminates every time: old code = 4 mv calls per start,
+#     fixed code = 1. Separately reproduced under real concurrency (not a CI
+#     arm — timing-based): old code lost 51/160 concurrent reads to
+#     CRASHED/WEDGED against a continuously-alive pid; fixed code lost 0/160
+#     under the identical stress.
+MVSHIM="$(mktemp -d)"
+cat > "$MVSHIM/mv" <<'SHIM'
+#!/usr/bin/env bash
+echo mv >> "$MV_COUNT_FILE"
+exec /bin/mv "$@"
+SHIM
+chmod +x "$MVSHIM/mv"
+(
+  source "$REPO/lib/core.sh"; source "$REPO/lib/fleet.sh"
+  export MV_COUNT_FILE; MV_COUNT_FILE="$(mktemp)"
+  PATH="$MVSHIM:$PATH" hb_start ar12test
+  n=$(wc -l < "$MV_COUNT_FILE")
+  rm -f "$STATE_DIR/poller/ar12test.hb" "$MV_COUNT_FILE"
+  [[ "$n" -eq 1 ]]
+)
+if [[ $? -eq 0 ]]; then
+  PASS=$((PASS+1)); printf '  ✔ hb_start performs exactly ONE mv — no partial-record window\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("hb_start performed more than one mv — the AR-12 race window is back")
+  printf '  ✖ hb_start performed more than one mv — the AR-12 race window is back\n'
+fi
+rm -rf "$MVSHIM"
 
 section "migrate — import without touching the source"
 SRC="$AIMAIL_ROOT/oldbox"

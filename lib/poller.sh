@@ -92,7 +92,13 @@ poller_run() {
     #    a human 3h24m later to end it. A PARKED poller costs nothing and wakes
     #    itself. A DISARMED poller costs nothing and NEVER WAKES. They are
     #    identical on a token bill and opposite in recoverability.
+    # ⭐ AR-09 — write the PARK heartbeat every cycle spent here, on ITS OWN key
+    #    (`hb_beat` is deliberately NOT called: a parked poller must not look
+    #    busy). Without this, `poller_state` had only a staling `beat` to judge
+    #    health by, and a correctly parked poller reads WEDGED after `limit`
+    #    seconds — the dashboard then tells a human to kill a healthy process.
     if [[ -f "$STATE_DIR/throttled" ]]; then
+      hb_park "$seat"
       sleep "$interval"; continue
     fi
 
