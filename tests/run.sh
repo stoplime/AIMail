@@ -349,7 +349,7 @@ section "stop hook — five arms, each asserting its logged DECISION"
 # "0 failed" with five arms silently missing (measured: 92 -> 87 passed, exit 0).
 # ⇒ A tally over a subprocess's output cannot distinguish "all arms passed" from
 #   "no arm ran". Only the rc and an EXPECTED COUNT can.
-SG_EXPECTED_ARMS=5
+SG_EXPECTED_ARMS=6
 SG="$(bash "$REPO/hooks/stop_guard.sh" selftest 2>&1)"; SG_RC=$?
 while IFS= read -r line; do
   case "$line" in
@@ -373,7 +373,7 @@ fi
 # allow-* decision and this fires even though the count is still 5.
 # ⛔ The remaining escape is a hollow branch that prints a hardcoded CORRECT string.
 #   That is deliberate falsification, not rot, and no in-suite check can distinguish it.
-for _d in BLOCK-no-poller allow-poller-armed allow-exempt allow-disarmed allow-unmapped; do
+for _d in BLOCK-no-poller allow-stop-hook-active-loop-breaker allow-poller-armed allow-exempt allow-disarmed allow-unmapped; do
   if printf '%s\n' "$SG" | grep -qF "decision=$_d"; then
     PASS=$((PASS+1)); printf '  ✔ stop_guard observed decision=%s\n' "$_d"
   else

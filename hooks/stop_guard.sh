@@ -90,10 +90,10 @@ case "${1:-hook}" in
     "$_H/../bin/aimail" seat add testseat "selftest" >/dev/null 2>&1
     printf 'testseat' > "$G/session.selftest"
 
-    _arm() { # _arm <name> <want-rc> <want-decision>
-      local name="$1" wrc="$2" wdec="$3" rc dec
+    _arm() { # _arm <name> <want-rc> <want-decision> [json-body]
+      local name="$1" wrc="$2" wdec="$3" body="${4:-{\}}" rc dec
       : > "$tmp/state/stophook.log"
-      echo '{}' | bash "$_H/stop_guard.sh" hook >/dev/null 2>&1; rc=$?
+      printf '%s' "$body" | bash "$_H/stop_guard.sh" hook >/dev/null 2>&1; rc=$?
       dec="$(awk -F'\t' 'END{print $5}' "$tmp/state/stophook.log" 2>/dev/null)"
       if [[ "$rc" == "$wrc" && "$dec" == "$wdec" ]]; then ok "$name (rc=$rc decision=$dec)"
       else warn "$name FAILED — got rc=$rc decision='$dec', wanted rc=$wrc decision=$wdec"; fi
@@ -101,6 +101,15 @@ case "${1:-hook}" in
 
     : > "$G/enabled"
     _arm "ARM 1 blocks a stop with no poller"     2 "BLOCK-no-poller"
+
+    # ⭐ AR-08 — the SAME conditions that just blocked (armed, mapped, no
+    #   poller) must instead ALLOW when the harness marks this as a repeat
+    #   invocation after an already-blocked stop this turn. This is the
+    #   positive control: nothing about the seat's actual reachability
+    #   changed, only the loop-breaker flag — proving it is THAT flag doing
+    #   the work, not some other condition coincidentally relaxing.
+    _arm "ARM 1b honours stop_hook_active — no re-block on the retry" \
+      0 "allow-stop-hook-active-loop-breaker" '{"stop_hook_active": true}'
 
     # ② POSITIVE CONTROL IN THE FORM THE GUARD CLAIMS TO DETECT: a genuinely
     #    armed poller must be ALLOWED. Without this arm, a guard that blocks
@@ -124,8 +133,42 @@ case "${1:-hook}" in
     rm -rf "$tmp"; exit 0 ;;
 
   hook)
-    cat >/dev/null 2>&1 || true   # drain the hook JSON; we key on env, not its fields
+    hook_json="$(cat 2>/dev/null || true)"
     seat="$(_seat_for_session)"
+
+    # ⭐⭐ AR-08 — honour stop_hook_active, the platform's own loop-breaker.
+    #   `cat >/dev/null` used to drain this JSON entirely and discard it. This
+    #   field is true exactly when the harness is re-invoking this SAME hook
+    #   after IT ALREADY BLOCKED the previous stop attempt this turn — the
+    #   platform's own one-shot escape valve, so a hook can block at most once
+    #   per genuine stop, never forever. Dropping the field silently disabled
+    #   that valve: nothing here distinguished "the first stop attempt" from
+    #   "the harness already gave this hook one chance and is asking again",
+    #   so a seat that could not satisfy the underlying condition (poller
+    #   genuinely cannot be armed, for whatever reason) had no way out at all —
+    #   in direct contradiction of this file's own stated law: FAIL OPEN, a
+    #   false block must never trap a session in a stop/continue loop it
+    #   cannot escape.
+    # ⛔ NOT "have the hook re-arm the poller itself" (considered, and declined
+    #   with a reason, not silently skipped): a Stop hook is a subprocess the
+    #   PLATFORM forks, entirely outside the model's own tool-call bookkeeping.
+    #   Anything it backgrounds is invisible to the harness's own wake
+    #   mechanism (`run_in_background` is explicitly a CHILD OF THE SESSION —
+    #   see README.md) — so a poller started from here would be exactly the
+    #   ORPHANED, untracked process this whole system's other warnings exist
+    #   to prevent: alive, consuming mail, and unable to wake anyone. Fixing
+    #   the friction this way would trade a loud, escapable annoyance for a
+    #   silent, unreachable seat. `stop_hook_active` costs nothing and creates
+    #   no new process; it only relies on a signal the platform already sends.
+    active="$(printf '%s' "$hook_json" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print("1" if d.get("stop_hook_active") else "0")
+' 2>/dev/null || echo 0)"
+    if [[ "$active" == "1" ]]; then
+      _log "${seat:-unmapped}" "allow-stop-hook-active-loop-breaker"; exit 0
+    fi
 
     # Fail open: unmapped session. We do not guess which seat this is — guessing
     # is how a block lands on the wrong session.
