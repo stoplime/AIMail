@@ -291,13 +291,34 @@ section "stop hook — five arms, each asserting its logged DECISION"
 # ⚠ Run as part of the suite, not as a separate manual step. The first version of
 #   this selftest lived outside the suite, and its two "allow" arms passed while
 #   the guard was switched off entirely.
-SG="$(bash "$REPO/hooks/stop_guard.sh" selftest 2>&1)"
+# WHY the count and the rc are asserted, not just the printed lines: this block used to
+# tally ✔/FAILED from a subprocess and assert neither. A selftest that died before its
+# first arm emitted NOTHING, so both counters advanced by zero and the suite reported
+# "0 failed" with five arms silently missing (measured: 92 -> 87 passed, exit 0).
+# ⇒ A tally over a subprocess's output cannot distinguish "all arms passed" from
+#   "no arm ran". Only the rc and an EXPECTED COUNT can.
+SG_EXPECTED_ARMS=5
+SG="$(bash "$REPO/hooks/stop_guard.sh" selftest 2>&1)"; SG_RC=$?
 while IFS= read -r line; do
   case "$line" in
     *"✔"*) PASS=$((PASS+1)); printf '  %s\n' "$line" ;;
     *FAILED*) FAIL=$((FAIL+1)); FAILURES+=("stop_guard: $line"); printf '  ✖ %s\n' "$line" ;;
   esac
 done <<< "$SG"
+SG_ARMS="$(printf '%s\n' "$SG" | grep -cE '✔|FAILED')"
+if [[ $SG_RC -eq 0 ]]; then
+  PASS=$((PASS+1)); printf '  ✔ stop_guard selftest exited 0\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("stop_guard selftest exit=$SG_RC")
+  printf '  ✖ stop_guard selftest exited %s — its arms did not run to completion\n' "$SG_RC"
+fi
+if [[ $SG_ARMS -eq $SG_EXPECTED_ARMS ]]; then
+  PASS=$((PASS+1)); printf '  ✔ stop_guard reported all %s arms\n' "$SG_EXPECTED_ARMS"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("stop_guard arms: got $SG_ARMS want $SG_EXPECTED_ARMS")
+  printf '  ✖ stop_guard reported %s arms, expected %s — arms went MISSING, not failing\n' \
+    "$SG_ARMS" "$SG_EXPECTED_ARMS"
+fi
 
 section "budget — the boundary is measurable, the percentage is not"
 # Stub the block cache so these are fast and deterministic. block_json reads the
