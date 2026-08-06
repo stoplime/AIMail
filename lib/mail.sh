@@ -127,8 +127,27 @@ mail_send() {
 
   for t in "${resolved[@]}"; do
     id="${stamp}-${from}-${slug}"
-    local dest="$MAIL_DIR/$t/$id.md" n=1
-    while [[ -e "$dest" ]]; do dest="$MAIL_DIR/$t/${id}-$n.md"; n=$((n+1)); done
+    # ⛔⛔ CLAIM THE PATH ATOMICALLY, AND LOOK IN ALL THREE PLACES AN ID CAN LIVE.
+    # WHY: the id is (second, from, subject-slug), so two sends in the same second
+    # collide. The old code probed only the INBOX with `[[ -e ]]` and wrote later —
+    # a check-then-write race. Measured here at 2-way concurrency: 12/12 trials
+    # ended with an EMPTY inbox. Not "one lost" — BOTH destroyed, because the
+    # loser's integrity check re-read the WINNER's body, mismatched, and removed it.
+    # A message also lives on in unacked/ and archive/<shard>/, so a path free in the
+    # inbox is not proof the id is unused.
+    local dest="" n=0 claimed=0
+    while :; do
+      local cand="$MAIL_DIR/$t/${id}${n:+-$n}.md" base
+      base="$(basename "$cand" .md)"
+      if [[ -e "$cand" ]] \
+         || [[ -e "$MAIL_DIR/$t/unacked/$base.md" ]] \
+         || compgen -G "$MAIL_DIR/$t/archive/*/$base.md" >/dev/null 2>&1; then
+        n=$((n+1)); continue
+      fi
+      # O_EXCL create — the only test-and-claim that is atomic between processes.
+      if (set -o noclobber; : > "$cand") 2>/dev/null; then dest="$cand"; claimed=1; break; fi
+      n=$((n+1))
+    done
     {
       printf -- '---\n'
       printf 'id: %s\n' "$(basename "$dest" .md)"
@@ -149,7 +168,11 @@ mail_send() {
     # digest against the source's. A delivery count is not an integrity check.
     local got; got="$(sed -n '/^---$/,/^---$/!p' "$dest" | sed '1{/^$/d}' | sha256sum | cut -d' ' -f1)"
     if [[ "$got" != "$sha" ]]; then
-      rm -f "$dest"
+      # ⛔ Remove ONLY what this process claimed. The old unconditional `rm -f "$dest"`
+      # deleted whatever occupied the path; under a race that was another sender's
+      # correctly-delivered message. An integrity guard must never destroy a message
+      # it did not write.
+      [[ $claimed -eq 1 ]] && rm -f "$dest"
       rm -f "$body"
       die "INTEGRITY FAILURE writing to '$t' — delivered body digest != source digest. Nothing left in the inbox."
     fi
