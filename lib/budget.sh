@@ -291,6 +291,11 @@ budget_status() {
 #    disarm at the cap. The window reopened at 06:24 with nothing left to wake;
 #    three seats never woke at all and it took a human 3h24m later to end it.
 #    ⇒ Never tell a seat to disarm. Set the flag; the pollers park themselves.
+# ⭐ AR-11 fallback interval — when the block boundary cannot be measured, a
+#   park must still re-check soon rather than never. Matches budget_ramp's own
+#   recurring safety-net interval below.
+BUDGET_RAMP_FALLBACK_SEC="${AIMAIL_RAMP_FALLBACK_SEC:-1200}"
+
 budget_park() {
   local reason="${*:-scheduled park before the block boundary}"
   ensure_dirs
@@ -298,6 +303,14 @@ budget_park() {
   if [[ -f "$STATE_DIR/throttled" ]]; then
     info "already parked — leaving the original reason in place:"; sed 's/^/  /' "$STATE_DIR/throttled"; return 0
   fi
+  # ⭐ AR-03 — `atomic_write` used as a pipe sink runs its `die` in a SUBSHELL
+  #   (bash forks the receiving end of a pipe). `set -uo pipefail` means the
+  #   PIPELINE's own exit status correctly reflects that failure, but nothing
+  #   here was reading it — so a failed write was followed, unconditionally,
+  #   by `ok "fleet PARKED"`. At the cap on a shared account that prints
+  #   success while spending the NEXT session's tokens on work that was never
+  #   actually parked. Check the pipeline's exit status explicitly; `pipefail`
+  #   only computes the number, it does not act on it for you.
   { printf 'PARKED %s\n' "$(now_iso)"
     printf 'ACCOUNT %s (cap %s%%)\n' "$(account_id)" "$(account_cap)"
     printf 'REASON %s\n' "$reason"
@@ -305,11 +318,22 @@ budget_park() {
     printf 'SEATS park themselves via this flag. NO mail was sent, deliberately —\n'
     printf '      a broadcast at the cap spends the last tokens of the window.\n'
     printf 'STAY ARMED. Your poller sleeps on this flag and wakes you at the ramp.\n'
-  } | atomic_write "$STATE_DIR/throttled"
+  } | atomic_write "$STATE_DIR/throttled" \
+    || die "budget park: failed to write the throttle flag — the fleet is NOT parked. Nothing else was written."
   # ⛔ WRITE THE RAMP BEFORE ANYTHING ELSE IS PARKED. Three individually-correct
   #    disarms once removed every path back. Never remove the last wake path.
-  [[ -n "$be" ]] && printf 'at\t%s\n' "$be" | atomic_write "$STATE_DIR/ramp_at"
-  ok "fleet PARKED. Pollers stay armed and will wake at $( [[ -n "$be" ]] && date -d "@$be" '+%H:%M' || echo 'the ramp' )."
+  # ⭐ AR-11 — this used to be `[[ -n "$be" ]] && printf ... | atomic_write`,
+  #   which wrote NOTHING when the block boundary was unmeasurable: a park with
+  #   `throttled` set and no `ramp_at` at all has NO self-wake path, ever — the
+  #   exact "never remove the last wake path" invariant this comment already
+  #   names, violated by the code directly beneath it. Fall back to a recurring
+  #   recheck instead of skipping the write: if the boundary is unmeasurable
+  #   NOW, ask again soon rather than parking forever on that account.
+  local rat; rat="${be:-$(( $(now_epoch) + BUDGET_RAMP_FALLBACK_SEC ))}"
+  printf 'at\t%s\n' "$rat" | atomic_write "$STATE_DIR/ramp_at" \
+    || die "budget park: failed to write ramp_at — the fleet would park with NO wake path. Not proceeding."
+  [[ -z "$be" ]] && warn "block boundary unmeasurable — ramp_at set to a $(( BUDGET_RAMP_FALLBACK_SEC / 60 ))-min recheck instead of the real boundary"
+  ok "fleet PARKED. Pollers stay armed and will wake at $( [[ -n "$be" ]] && date -d "@$be" '+%H:%M' || echo "a recheck in $(( BUDGET_RAMP_FALLBACK_SEC / 60 ))min" )."
 }
 
 budget_ramp() {
@@ -318,7 +342,9 @@ budget_ramp() {
   # Re-arm the gate 20 minutes out rather than deleting it: if this ramp does not
   # actually result in the seats being woken, it must fire AGAIN. Deleting the
   # trigger is how a ramp silently no-ops.
-  printf 'at\t%s\n' "$(( $(now_epoch) + 1200 ))" | atomic_write "$STATE_DIR/ramp_at"
+  # AR-03 — same pipe-sink propagation as budget_park above.
+  printf 'at\t%s\n' "$(( $(now_epoch) + BUDGET_RAMP_FALLBACK_SEC ))" | atomic_write "$STATE_DIR/ramp_at" \
+    || die "budget ramp: failed to write the new ramp_at — the throttle was cleared but the safety-net recheck was NOT scheduled."
   ok "throttle CLEARED at $(now_iso)"
   info "  ⚠ This is a CONDITION, not a permission. It reports that a block rolled."
   info "    It cannot see a WEEKLY cap or a human-imposed hold, and it lifts neither."
@@ -449,7 +475,21 @@ budget_autopilot() {
   if [[ -f "$STATE_DIR/throttled" ]] && (( now >= be )); then
     budget_ramp; return 0
   fi
-  (( left <= CHECKPOINT_MIN )) && budget_checkpoint
+  # ⭐⭐ AR-10 — run the checkpoint in a SUBSHELL. `budget_checkpoint` uses this
+  #   codebase's own refused/exit idiom (exit 3 on an unregistered sender, exit
+  #   4 if the boundary can't be re-read) — correct for a direct CLI call, but
+  #   FATAL here: called bare, that `exit` terminates the WHOLE autopilot
+  #   invocation, and the PARK below — a SAFETY action — never runs. A single
+  #   missing registry row would then silently let the fleet blow through its
+  #   cap with no handover, invisible from cron (nobody reads the log unless
+  #   something already looks wrong). The checkpoint is advisory; the park is
+  #   not; they must not share a fatal path. `( ... )` contains the exit to the
+  #   checkpoint step alone — file writes it makes still land, only its exit
+  #   stops propagating past this line.
+  if (( left <= CHECKPOINT_MIN )); then
+    ( budget_checkpoint ) \
+      || warn "autopilot: the checkpoint step failed or refused (see above) — continuing to the park check regardless; a missed checkpoint must never prevent a park"
+  fi
   if (( left <= PARK_MIN )) && [[ ! -f "$STATE_DIR/throttled" ]]; then
     budget_park "automatic: ${PARK_MIN} min before the block boundary at $(date -d "@$be" '+%H:%M')"
   fi

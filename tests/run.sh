@@ -530,6 +530,73 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("poller did not self-wake at the ramp"); kill $PARKPID 2>/dev/null
   printf '  ✖ poller did not wake at the ramp\n'
 fi
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/ramp_at"
+
+section "budget — AR-03: a failed write must never report PARKED"
+# ⛔ THE DEFECT: `{ ... } | atomic_write "$dest"` runs atomic_write's `die` in a
+#   SUBSHELL (the pipe's receiving end). `set -uo pipefail` makes the pipeline's
+#   own exit status correctly reflect that failure, but nothing read it — so a
+#   failed write was followed, unconditionally, by "✔ fleet PARKED". Force the
+#   write to fail (a read-only state dir) and confirm the function now refuses
+#   loudly instead of claiming success.
+chmod 555 "$AIMAIL_ROOT/state" 2>/dev/null
+"$AIMAIL" budget park "AR-03 forced-failure test" >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"; rc=$?
+chmod 755 "$AIMAIL_ROOT/state" 2>/dev/null
+if [[ "$rc" != "0" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ a failed write is reported loudly (rc=%s), not as success\n' "$rc"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-03: budget park reported success despite a failed write")
+  printf '  ✖ AR-03: budget park exited 0 despite the write failing\n'
+fi
+if grep -qi 'PARKED' "$AIMAIL_ROOT/.out" 2>/dev/null; then
+  FAIL=$((FAIL+1)); FAILURES+=("AR-03: 'fleet PARKED' was printed despite the write failing")
+  printf '  ✖ AR-03: success message printed anyway\n'
+else
+  PASS=$((PASS+1)); printf '  ✔ no success message was printed for a write that did not happen\n'
+fi
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/ramp_at"
+
+section "budget — AR-10: a refused checkpoint must not skip the park"
+# ⛔ THE DEFECT: `(( left <= CHECKPOINT_MIN )) && budget_checkpoint` — bare, not
+#   subshelled. budget_checkpoint uses this codebase's own refused/exit idiom
+#   (exit 3 on an unregistered sender), which TERMINATES THE WHOLE AUTOPILOT
+#   PROCESS, so the park check just below it never runs. Force the checkpoint
+#   to refuse (an unregistered supervisor) at a boundary where BOTH the
+#   checkpoint and the park are due, and confirm the park still happens.
+_stub_block 5
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/checkpoint_done" "$AIMAIL_ROOT/state/ramp_at"
+AIMAIL_SUPERVISOR=nobody-registered-here "$AIMAIL" budget autopilot \
+  >"$AIMAIL_ROOT/.out" 2>"$AIMAIL_ROOT/.err"; rc=$?
+if [[ -f "$AIMAIL_ROOT/state/throttled" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ the park happened even though the checkpoint step refused (autopilot rc=%s)\n' "$rc"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-10: a refused checkpoint prevented the park")
+  printf '  ✖ AR-10: park did NOT happen — refused checkpoint skipped it (rc=%s)\n' "$rc"
+  sed 's/^/      /' "$AIMAIL_ROOT/.err" | head -6
+fi
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/checkpoint_done" "$AIMAIL_ROOT/state/ramp_at"
+
+section "budget — AR-11: park must never leave ZERO wake path"
+# ⛔ THE DEFECT: `[[ -n "$be" ]] && printf ... | atomic_write ramp_at` wrote
+#   NOTHING when the block boundary was unmeasurable — a park with the
+#   throttle set and no ramp_at at all has NO self-wake path, ever, directly
+#   violating this file's own "never remove the last wake path" comment. Force
+#   genuine unmeasurability (no cached block, no network, and the most recent
+#   callout for this account already expired) and confirm a ramp_at still
+#   gets written as a fallback recheck.
+rm -f "$AIMAIL_ROOT/state/block.json" "$AIMAIL_ROOT/state/ramp_at" "$AIMAIL_ROOT/state/throttled"
+ACCT="$("$AIMAIL" budget account 2>/dev/null | grep -oE 'account: [^ ]+' | cut -d' ' -f2)"
+printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$ACCT" 60 "callout" "$(( $(date +%s) - 600 ))" \
+  >> "$AIMAIL_ROOT/state/budget_ledger.tsv"
+accepts "park succeeds even when the boundary is genuinely unmeasurable" \
+  -- budget park "AR-11 unmeasurable-boundary test"
+if [[ -f "$AIMAIL_ROOT/state/ramp_at" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ ramp_at was written as a fallback recheck even with an unmeasurable boundary\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-11: park left NO ramp_at when the boundary was unmeasurable")
+  printf '  ✖ AR-11: park left NO ramp_at — the fleet would park with no wake path at all\n'
+fi
+rm -f "$AIMAIL_ROOT/state/throttled" "$AIMAIL_ROOT/state/ramp_at"
 
 section "poller — AR-05/AR-06: ramp self-detected while parked, and no refire on restart"
 # ⛔⛔ THE DEFECT: the throttle branch `continue`d unconditionally, so a poller
