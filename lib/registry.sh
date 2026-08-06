@@ -138,14 +138,59 @@ _edit_distance() {
 #   became indistinguishable from addresses.
 _valid_seat_name() { [[ "$1" =~ ^[a-z][a-z0-9-]{1,31}$ ]]; }
 
+# ─── Locking (AR-04) ───────────────────────────────────────────────────────
+# ⛔⛔ THE DEFECT THIS CLOSES: `seat_add` was check-then-append; `seat_retire`
+#   was a WHOLE-FILE read-modify-write with no coordination between them.
+#   Interleaved, either direction loses a row:
+#     add THEN retire   retire's read is a snapshot taken before the add's
+#                       append landed; its whole-file rewrite replaces the
+#                       file with content computed from that stale snapshot,
+#                       silently discarding the row the add just wrote.
+#     retire THEN retire (two different seats, concurrently)
+#                       both read the SAME starting state; each computes an
+#                       independent single-row edit; whichever writes last
+#                       wins, and the other's edit is gone — not merged, not
+#                       even THAT seat's retirement recorded.
+#   `atomic_write` only makes ONE process's write atomic (no reader ever sees
+#   a half-written file). It does nothing about TWO processes each computing
+#   their write from a state the other has already invalidated. Measured: 12
+#   retires x 12 adds -> expected 14 rows, got 9.
+# ⇒ Every registry MUTATION must hold ONE exclusive lock across its entire
+#   read-modify-write, not just make its own write atomic. `flock` on a
+#   dedicated lock file (never the registry file itself — atomic_write
+#   replaces it via `mv`, which would orphan a lock held on the old inode).
+REGISTRY_LOCKFILE() { echo "$STATE_DIR/seats.lock"; }
+
+# _registry_txn <fn> [args…] — run <fn> with the registry lock held, and
+# propagate its exit status exactly. refused/die inside <fn> must still reach
+# the CLI caller as their own reported failure — this only serialises the
+# critical section, it must never swallow or reshape what the mutation
+# reports. A bounded wait (not indefinite): a genuinely stuck holder must
+# fail loud, not hang every other seat's registry mutation forever.
+_registry_txn() {
+  mkdir -p "$STATE_DIR"
+  local lockfile; lockfile="$(REGISTRY_LOCKFILE)"
+  (
+    flock -x -w 10 200 || {
+      echo "⛔ could not acquire the registry lock within 10s — another seat/add/retire may be stuck" >&2
+      exit 1
+    }
+    "$@"
+  ) 200>"$lockfile"
+}
+
 seat_add() {
   local name="$1" desc="${2:-}" aliases="${3:--}"
   _valid_seat_name "$name" || refused "'$name' is not a valid seat name." \
     "Allowed: lowercase letters, digits and hyphens; 2-32 chars; must start with a letter." \
     "This rejects the shell-accident names (\`ALL:\`, \`you:\`) that the previous system" \
     "accumulated in the same namespace as real inboxes."
-  seat_exists "$name" && refused "seat '$name' is already registered." "  aimail seat list"
   _seats_init
+  _registry_txn _seat_add_locked "$name" "$desc" "$aliases"
+}
+_seat_add_locked() {
+  local name="$1" desc="$2" aliases="$3"
+  seat_exists "$name" && refused "seat '$name' is already registered." "  aimail seat list"
   printf '%s\t%s\t%s\t%s\n' "$name" "active" "${aliases:--}" "${desc:-(no description)}" >> "$SEATS_FILE"
   mkdir -p "$MAIL_DIR/$name/archive" "$MAIL_DIR/$name/unacked"
   ok "registered seat '$name'"
@@ -154,6 +199,10 @@ seat_add() {
 
 seat_retire() {
   local name="$1" successor="${2:-}"
+  _registry_txn _seat_retire_locked "$name" "$successor"
+}
+_seat_retire_locked() {
+  local name="$1" successor="$2"
   seat_exists "$name" || refused "'$name' is not a registered seat."
   local note="retired"; [[ -n "$successor" ]] && note="retired — use '$successor' instead"
   local tmp; tmp="$(mktemp)"

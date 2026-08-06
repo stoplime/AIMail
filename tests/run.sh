@@ -104,6 +104,36 @@ accepts "retire it, naming a successor"         -- seat retire oldseat main
 refuses "a retired seat refuses mail" "RETIRED" \
   -- send --to oldseat --from main --subject x --body-file /etc/hostname
 
+section "registry — AR-04: concurrent add/retire must lose nothing"
+# ⛔⛔ THE DEFECT: `seat_add` was check-then-append; `seat_retire` was a
+#   WHOLE-FILE read-modify-write, with no coordination between them. A retire
+#   interleaved with an add replaces the file from a snapshot taken BEFORE the
+#   add's row landed, silently discarding it; two concurrent retires each
+#   compute from the same stale snapshot and whichever writes last wins,
+#   discarding the other's retirement entirely. Reproduce the review's own
+#   shape: 12 retires racing 12 NEW concurrent adds. Real background
+#   processes, not a stub — this is exactly the class of defect a green suite
+#   using stubbed state cannot see.
+for i in $(seq 1 12); do "$AIMAIL" seat add "ar04r$i" "seed" >/dev/null 2>&1; done
+for i in $(seq 1 12); do "$AIMAIL" seat retire "ar04r$i" >/dev/null 2>&1 & done
+for i in $(seq 1 12); do "$AIMAIL" seat add "concurrent$i" "concurrent add" >/dev/null 2>&1 & done
+wait
+AR04_ROWS="$(grep -vE '^\s*(#|$)' "$AIMAIL_ROOT/seats.tsv")"
+AR04_RETIRED=$(printf '%s\n' "$AR04_ROWS" | awk -F'\t' '$1 ~ /^ar04r/ && $2=="retired"' | wc -l)
+AR04_NEW=$(printf '%s\n' "$AR04_ROWS" | awk -F'\t' '$1 ~ /^concurrent/' | wc -l)
+if (( AR04_RETIRED == 12 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 12 concurrent retires landed (0 lost to the race)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-04: only $AR04_RETIRED/12 retires landed")
+  printf '  ✖ AR-04: only %s/12 retires landed — rows lost to the race\n' "$AR04_RETIRED"
+fi
+if (( AR04_NEW == 12 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 12 concurrent adds landed (0 lost to the race)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("AR-04: only $AR04_NEW/12 concurrent adds landed")
+  printf '  ✖ AR-04: only %s/12 concurrent adds landed — rows lost to the race\n' "$AR04_NEW"
+fi
+
 section "registry — a refusal must name the seat you meant"
 # ⚠ A guard that refuses without naming the alternative is a wall, not a guard.
 #   `metrcs` -> `metrics-report` is edit distance 8 against the full name,
