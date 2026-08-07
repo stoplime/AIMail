@@ -212,6 +212,33 @@ _seat_retire_locked() {
   ok "seat '$name' retired. Mail addressed to it is now refused, not silently dropped."
 }
 
+seat_unretire() {
+  local name="$1" desc="${2:-}"
+  _registry_txn _seat_unretire_locked "$name" "$desc"
+}
+# ⛔⛔ THE DEFECT THIS CLOSES: retirement was a ONE-WAY DOOR. `seat_add` refuses
+#   an existing name, so a seat retired by mistake — or, the real incident,
+#   registered `retired` WHILE STILL LIVE — had no way back in except a HAND
+#   EDIT of the registry file. That is the worst possible remedy for exactly
+#   this file: its own known defect is LOST ROWS under an uncoordinated
+#   read-modify-write (AR-04), and a human editing it live races every other
+#   seat's `add`/`retire` the identical way. The repair path was more
+#   dangerous than the fault it repaired.
+# ⇒ Same lock, same shape as retire: this is not a new mutation class, it is
+#   retire's missing inverse, and it must be exactly as safe.
+_seat_unretire_locked() {
+  local name="$1" desc="$2"
+  seat_exists "$name" || refused "'$name' is not a registered seat."
+  local status; status="$(seat_field "$name" 2)"
+  [[ "$status" == "retired" ]] || refused "seat '$name' is not retired (status: '$status') — nothing to unretire." \
+    "  aimail seat list"
+  local tmp; tmp="$(mktemp)"
+  awk -F'\t' -v OFS='\t' -v s="$name" -v d="${desc:-reactivated}" \
+    '$1==s{$2="active"; $4=d} {print}' "$SEATS_FILE" > "$tmp"
+  atomic_write "$SEATS_FILE" < "$tmp"; rm -f "$tmp"
+  ok "seat '$name' reactivated — status back to active. Mail addressed to it will resolve again."
+}
+
 seat_list() {
   _seats_init
   printf '%-22s %-8s %-18s %s\n' SEAT STATUS ALIASES DESCRIPTION

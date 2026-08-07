@@ -33,6 +33,7 @@ SEATS (the address space — a name is only an address if it is registered)
   aimail seat list                          every registered seat
   aimail seat add <name> [desc] [aliases]   register one
   aimail seat retire <name> [successor]     stop accepting mail, say what to use
+  aimail seat unretire <name> [desc]        reverse a mistaken/stale retirement — back to active
   aimail seat resolve <name>                what would this name deliver to?
 
 MAIL
@@ -92,10 +93,12 @@ case "$cmd" in
                seat_add "$1" "${2:-}" "${3:--}" ;;
       retire)  [[ $# -ge 1 ]] || refused "usage: aimail seat retire <name> [successor]"
                seat_retire "$1" "${2:-}" ;;
+      unretire) [[ $# -ge 1 ]] || refused "usage: aimail seat unretire <name> [description]"
+               seat_unretire "$1" "${2:-}" ;;
       resolve) [[ $# -ge 1 ]] || refused "usage: aimail seat resolve <name>"
                r="$(seat_resolve "$1")" || exit $?
                ok "'$1' delivers to '$r'" ;;
-      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | resolve" ;;
+      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | unretire | resolve" ;;
     esac ;;
 
   send)    ensure_dirs; mail_send "$@" ;;

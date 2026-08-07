@@ -134,6 +134,60 @@ else
   printf '  ✖ AR-04: only %s/12 concurrent adds landed — rows lost to the race\n' "$AR04_NEW"
 fi
 
+section "registry — seat unretire: retirement was a one-way door"
+# ⛔⛔ THE DEFECT THIS CLOSES: `seat_add` refuses an existing name, so a seat
+#   retired by mistake — the real incident: a LIVE seat registered `retired`
+#   while still working — had no way back except a HAND EDIT of the registry
+#   file. That is the worst possible remedy for exactly this file: its own
+#   known defect is lost rows under an uncoordinated read-modify-write (AR-04).
+accepts "register a seat to mis-retire"        -- seat add livewrongly "a live seat"
+accepts "retire it (simulating the mistake)"   -- seat retire livewrongly
+refuses "mail to it now refuses, as designed"  "RETIRED" \
+  -- send --to livewrongly --from livewrongly --subject x --body-file /etc/hostname
+accepts "unretire reverses it"                 -- seat unretire livewrongly "back, was a mistake"
+accepts "mail resolves again post-unretire"    \
+  -- send --to livewrongly --from livewrongly --subject "post-unretire" --body-file /etc/hostname
+"$AIMAIL" seat list >"$AIMAIL_ROOT/.out" 2>/dev/null
+if [[ "$(grep livewrongly "$AIMAIL_ROOT/.out" | awk '{print $2}')" == "active" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ status is active again, not left at retired\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("unretire did not restore active status")
+  printf '  ✖ unretire did not restore active status\n'
+fi
+# ③ the other direction — unretiring a seat that is NOT retired must refuse,
+#    not silently no-op (a silent no-op here would hide a typo'd seat name).
+refuses "unretire on an ACTIVE seat is refused, not a silent no-op" "is not retired" \
+  -- seat unretire livewrongly "again"
+refuses "unretire on an unregistered name is refused" "not a registered seat" \
+  -- seat unretire totally-unregistered-name
+
+section "registry — unretire shares the SAME lock as add/retire (does not reopen AR-04)"
+# unretire is retire's inverse and touches the identical file the identical
+# way — it must be proven to share the lock, not just assumed to, or fixing
+# one one-way door could quietly reopen the exact race AR-04 closed.
+for i in $(seq 1 8); do
+  "$AIMAIL" seat add "unret$i" "seed" >/dev/null 2>&1
+  "$AIMAIL" seat retire "unret$i" >/dev/null 2>&1
+done
+for i in $(seq 1 8); do "$AIMAIL" seat unretire "unret$i" "concurrent unretire" >/dev/null 2>&1 & done
+for i in $(seq 1 8); do "$AIMAIL" seat add "unretnew$i" "concurrent add" >/dev/null 2>&1 & done
+wait
+UNR_ROWS="$(grep -vE '^\s*(#|$)' "$AIMAIL_ROOT/seats.tsv")"
+UNR_ACTIVE=$(printf '%s\n' "$UNR_ROWS" | awk -F'\t' '$1 ~ /^unret[0-9]/ && $2=="active"' | wc -l)
+UNR_NEW=$(printf '%s\n' "$UNR_ROWS" | awk -F'\t' '$1 ~ /^unretnew/' | wc -l)
+if (( UNR_ACTIVE == 8 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 8 concurrent unretires landed (0 lost to a race)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("unretire concurrency: only $UNR_ACTIVE/8 landed")
+  printf '  ✖ unretire concurrency: only %s/8 landed — rows lost\n' "$UNR_ACTIVE"
+fi
+if (( UNR_NEW == 8 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 8 concurrent adds alongside unretire landed (0 lost)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("unretire concurrency: only $UNR_NEW/8 concurrent adds landed")
+  printf '  ✖ unretire concurrency: only %s/8 concurrent adds landed\n' "$UNR_NEW"
+fi
+
 section "registry — a refusal must name the seat you meant"
 # ⚠ A guard that refuses without naming the alternative is a wall, not a guard.
 #   `metrcs` -> `metrics-report` is edit distance 8 against the full name,
