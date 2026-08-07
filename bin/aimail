@@ -40,6 +40,9 @@ MAIL
   aimail send --to <seat> [--to <seat>…] --from <seat> --subject <s> --body-file <p>
   aimail send … < body.md                   body may also arrive on stdin
   aimail ack <seat> --all | <id>…           acted on it → archive it
+                                             --all requires a MATCHING, RECENT
+                                             'deliver' (AIMAIL_ACK_TTL, default
+                                             600s) — add --force to skip that
   aimail where <seat> <pattern>             which STATE is a message in?
 
 POLLING

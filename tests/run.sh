@@ -267,6 +267,68 @@ ARCHIVED=$(find "$AIMAIL_ROOT/mail/main/archive" -name '*.md' | wc -l)
 if (( ARCHIVED > 0 )); then PASS=$((PASS+1)); printf '  ✔ ack archived %s message(s) into a month shard\n' "$ARCHIVED"
 else FAIL=$((FAIL+1)); FAILURES+=("ack did not archive"); printf '  ✖ ack did not archive\n'; fi
 
+section "ack --all — AR-23: refuse to archive anything not just shown"
+# ⛔ THE DEFECT: `ack --all` swept EVERYTHING in unacked/ unconditionally,
+#   whether or not THIS call had actually just seen it. unacked/ is re-printed
+#   on every `deliver`, but nothing tied the ack to a delivery that showed the
+#   SAME set — a caller (human or seat) could run `ack --all` from a stale or
+#   entirely absent context, or ack from a subject-line grep, and it archived
+#   silently. Real cost, per assistant: a hard blocker report lost 100 minutes,
+#   twice. ⇒ --all now requires a receipt written by `deliver`, matching
+#   unacked/ EXACTLY and recent (AIMAIL_ACK_TTL). Explicit-id ack is untouched:
+#   naming an id already IS the claim you read that one.
+accepts "register a seat for the ack-receipt guard" -- seat add ackguard "ack --all guard"
+printf 'first message\n' > "$AIMAIL_ROOT/body1.md"
+accepts "send it a message" -- send --to ackguard --from ackguard --subject one --body-file "$AIMAIL_ROOT/body1.md"
+accepts "deliver it (writes a fresh, matching receipt)" -- deliver ackguard
+# ① a FRESH, matching receipt — ack --all must succeed exactly as before.
+accepts "ack --all succeeds right after a matching deliver" -- ack ackguard --all
+ACKG1=$(find "$AIMAIL_ROOT/mail/ackguard/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ACKG1 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ the normal case still works: 1 message archived\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("ack --all with a fresh receipt: got $ACKG1 archived, want 1")
+  printf '  ✖ ack --all with a fresh receipt: got %s archived, want 1\n' "$ACKG1"
+fi
+# ② a STALE receipt (delivery happened, but long enough ago that the caller
+#    cannot credibly be acting on what it showed) — must refuse.
+printf 'second message\n' > "$AIMAIL_ROOT/body2.md"
+accepts "send a second message" -- send --to ackguard --from ackguard --subject two --body-file "$AIMAIL_ROOT/body2.md"
+accepts "deliver it" -- deliver ackguard
+touch -d "@$(( $(date +%s) - 700 ))" "$AIMAIL_ROOT/state/last_delivered/ackguard"
+refuses "ack --all refuses on a STALE receipt (AIMAIL_ACK_TTL=600 default)" "does not match a recent delivery" \
+  -- ack ackguard --all
+ACKG2=$(find "$AIMAIL_ROOT/mail/ackguard/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ACKG2 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ the second message was NOT archived on a stale receipt\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("stale-receipt refusal still archived: now $ACKG2 total")
+  printf '  ✖ stale-receipt refusal still archived — now %s total\n' "$ACKG2"
+fi
+# ③ a MISMATCHED receipt — something is sitting in unacked/ that the most
+#    recent delivery never actually printed (e.g. a second, concurrent poller
+#    wrote it after this caller's `deliver`). Must refuse even though the
+#    receipt is fresh.
+printf 'never shown\n' > "$AIMAIL_ROOT/mail/ackguard/unacked/20990101T000000-injected-not-really-delivered-0.md"
+refuses "ack --all refuses when unacked/ has something the receipt never covered" "does not match a recent delivery" \
+  -- ack ackguard --all
+ACKG3=$(find "$AIMAIL_ROOT/mail/ackguard/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ACKG3 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ the un-shown message was NOT archived on a mismatched receipt\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("mismatched-receipt refusal still archived: now $ACKG3 total")
+  printf '  ✖ mismatched-receipt refusal still archived — now %s total\n' "$ACKG3"
+fi
+# ④ --force is still a real escape hatch for a deliberate, eyes-open sweep.
+accepts "ack --all --force sweeps it anyway" -- ack ackguard --all --force
+ACKG4=$(find "$AIMAIL_ROOT/mail/ackguard/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ACKG4 == 3 )); then
+  PASS=$((PASS+1)); printf '  ✔ --force archived all 3, bypassing the receipt check\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("--force did not sweep everything: got $ACKG4 want 3")
+  printf '  ✖ --force did not sweep everything: got %s, want 3\n' "$ACKG4"
+fi
+
 section "where — a state, never a count"
 accepts "where finds an archived message"      -- where main ok
 # ⛔ The distinction this asserts is the whole point: `ls | wc -l` returns 0 both

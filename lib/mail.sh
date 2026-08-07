@@ -211,9 +211,11 @@ _check_body_integrity() {
 
 # ─── Deliver (called by the poller) ───────────────────────────────────────────
 # Prints content, then moves to unacked/. NEVER to archive/.
+LAST_DELIVERED_FILE() { echo "$STATE_DIR/last_delivered/$1"; }
 mail_deliver() {
   local seat="$1" maxb="${2:-60000}"
   local total=0 shown=0 deferred=0
+  local -a shown_names=()
   mkdir -p "$MAIL_DIR/$seat/unacked"
 
   local -a queue=()
@@ -257,11 +259,18 @@ mail_deliver() {
     #    way to detect it: the failure would be invisible and would read as calm.
     if cat -- "$f"; then
       [[ "$(dirname "$f")" == "$MAIL_DIR/$seat" ]] && mv -f -- "$f" "$MAIL_DIR/$seat/unacked/"
-      total=$((total+sz)); shown=$((shown+1))
+      total=$((total+sz)); shown=$((shown+1)); shown_names+=("$b")
     else
       warn "COULD NOT READ — left in place, not advanced: $b"
     fi
   done
+
+  # ⭐ AR-23 — the delivery RECEIPT `ack --all` checks against. Written every
+  #   call, even when shown=0, so a delivery that showed nothing NEW (everything
+  #   was already printed and still sitting un-acked) still records exactly what
+  #   is currently on offer — see mail_ack for why this must match exactly.
+  mkdir -p "$(dirname "$(LAST_DELIVERED_FILE "$seat")")"
+  printf '%s\n' "${shown_names[@]}" | sort > "$(LAST_DELIVERED_FILE "$seat")"
 
   printf '%s\n' "════════════════════════════════════════════════════════════════════"
   info "$shown message(s) delivered. NOT YET ARCHIVED."
@@ -277,13 +286,45 @@ mail_deliver() {
 }
 
 # ─── Acknowledge ──────────────────────────────────────────────────────────────
+# ⛔⛔ AR-23 — `ack --all` used to sweep EVERY file in unacked/ unconditionally.
+#   unacked/ is re-printed on every `deliver`, but nothing tied THIS ack to a
+#   delivery that had just shown the SAME set — a caller could run `ack --all`
+#   in a fresh context long after the actual reading happened (or never
+#   happened at all: acked from a subject-line grep, not from what was on
+#   screen), and it archived silently. MEASURED: a hard blocker report lost
+#   for 100 minutes, twice. ⇒ --all now requires a RECENT delivery RECEIPT
+#   (written by mail_deliver every call) whose file set matches unacked/
+#   EXACTLY. Acking by explicit id is unaffected — naming an id already is
+#   the claim you read that one — and --force still allows a deliberate sweep.
 mail_ack() {
   local seat="$1"; shift
   local unacked="$MAIL_DIR/$seat/unacked"
+  local force=0
+  local -a rest=()
+  local a; for a in "$@"; do
+    [[ "$a" == "--force" ]] && force=1 || rest+=("$a")
+  done
+  set -- "${rest[@]}"
+
   local -a targets=()
   if [[ "${1:-}" == "--all" ]]; then
     while IFS= read -r f; do [[ -n "$f" ]] && targets+=("$f"); done \
       < <(find "$unacked" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
+    if (( force == 0 )) && (( ${#targets[@]} > 0 )); then
+      local receipt; receipt="$(LAST_DELIVERED_FILE "$seat")"
+      local cur have age ttl
+      cur="$(printf '%s\n' "${targets[@]##*/}" | sort)"
+      have=""; [[ -f "$receipt" ]] && have="$(sort "$receipt")"
+      ttl="${AIMAIL_ACK_TTL:-600}"
+      age=999999
+      [[ -f "$receipt" ]] && age=$(( $(now_epoch) - $(stat -c %Y "$receipt" 2>/dev/null || echo 0) ))
+      if [[ "$cur" != "$have" ]] || (( age > ttl )); then
+        refused "'$seat' ack --all does not match a recent delivery — refusing to archive unread mail." \
+          "  What's in unacked/ right now must have been shown by a 'deliver' in the" \
+          "  last ${ttl}s, exactly. Run 'aimail deliver $seat' to see the current set," \
+          "  then ack — or 'aimail ack $seat --all --force' to sweep it unread."
+      fi
+    fi
   else
     local id; for id in "$@"; do
       local p="$unacked/$id"; [[ "$p" == *.md ]] || p="$p.md"
