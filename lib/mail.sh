@@ -306,7 +306,8 @@ mail_deliver() {
     printf '%s\n' "────────────────────────────────────────────────────────────"
     printf '📎 %s previously-shown message(s) remain UN-ACKED (not re-printed):\n' "$summarized"
     printf '   %s\n' "${summary_names[@]}"
-    printf '   Run `aimail status %s` for subjects, or ack/act on them now.\n' "$seat"
+    printf '   Never actually read one (e.g. it was shown by a background `poll`,\n'
+    printf '   not to you)? Run `aimail show %s <id>` to re-print it in full.\n' "$seat"
   fi
 
   # Persist the shown-set: everything just shown in full, plus everything already
@@ -335,6 +336,35 @@ mail_deliver() {
   info "⚠ A message's FULL BODY prints exactly once. Still un-acked after that, it is a"
   info "  one-line summary on every later poll — visible, but never re-spent in full."
   return 0
+}
+
+# ─── Show (re-print a specific message, full body, unconditionally) ──────────
+# ⛔⛔ AR-25 — "SHOWN EXACTLY ONCE" HAD NO RECOVERY PATH WHEN THE ONE SHOWING WAS
+#   MISSED (audit, 2026-08-07 12:03). `aimail poll <seat>` is a harness-tracked
+#   BACKGROUND task: the body it prints lands in the task's OWN output file, not
+#   in the calling session's context — the seat is notified the task finished,
+#   it is not hand-delivered the content. If the seat then runs only the
+#   documented read path (`aimail deliver <seat>`) expecting to see it, it gets
+#   a one-line summary instead — the message was genuinely SHOWN (bytes left
+#   the process), just not to a reader who was there to receive them. MEASURED:
+#   this ate a T-391 gate approval and an authoring notice inside 15 minutes;
+#   both were recoverable only by reading unacked/ off disk by hand, which is
+#   not a documented command. ⇒ `show` closes that gap directly: it re-prints
+#   ONE message's full body, unconditionally, regardless of shown-state — the
+#   summary line below now names it explicitly, so recovery never requires
+#   knowing the mailbox's on-disk layout.
+mail_show() {
+  local seat="$1" id="$2"
+  local p="$id"; [[ "$p" == *.md ]] || p="$p.md"
+  local f
+  for f in "$MAIL_DIR/$seat/unacked/$p" "$MAIL_DIR/$seat/$p" "$MAIL_DIR/$seat"/archive/*/"$p"; do
+    if [[ -f "$f" ]]; then
+      cat -- "$f"
+      return 0
+    fi
+  done
+  refused "no message '$id' found for seat '$seat' (checked unacked/, inbox, archive/)." \
+    "  aimail status $seat   shows what is currently outstanding"
 }
 
 # ─── Acknowledge ──────────────────────────────────────────────────────────────

@@ -392,6 +392,51 @@ else
   printf '  ✖ ack --all after summarizing: got %s archived, want 13\n' "$ARCHIVED_NA"
 fi
 
+section "show — AR-25: a body shown somewhere unread must still be recoverable"
+# ⛔⛔ THE DEFECT (audit, 2026-08-07 12:03): `aimail poll <seat>` is a harness-tracked
+#   BACKGROUND task — the body it prints lands in the task's own output file, not the
+#   calling session's context. A seat notified the task finished, who then reads only
+#   the documented path (`aimail deliver <seat>`), got a one-line summary — the message
+#   was genuinely SHOWN (bytes left the process), just never to a reader who was there.
+#   MEASURED: a T-391 gate approval and an authoring notice both lost this way, recovered
+#   only by reading unacked/*.md off disk by hand — not a documented command.
+accepts "register a seat for the show recovery path" -- seat add showseat "recovery guard"
+printf 'the body that must remain recoverable\n' > "$AIMAIL_ROOT/showbody.md"
+accepts "send it a message" -- send --to showseat --from showseat --subject "recover me" --body-file "$AIMAIL_ROOT/showbody.md"
+accepts "first deliver shows it in full" -- deliver showseat
+SHOW_ID=$(basename "$(ls "$AIMAIL_ROOT/mail/showseat/unacked/"*.md | head -1)")
+accepts "second deliver: summarized, not re-printed (this is the exposure)" -- deliver showseat
+if grep -q '📬' "$AIMAIL_ROOT/.out"; then
+  FAIL=$((FAIL+1)); FAILURES+=("second deliver unexpectedly re-printed in full")
+  printf '  ✖ second deliver unexpectedly re-printed in full\n'
+else
+  PASS=$((PASS+1)); printf '  ✔ confirmed: second deliver only summarizes, exactly as AR-24 intends\n'
+fi
+accepts "show re-prints it in full, unconditionally, despite being 'already shown'" \
+  -- show showseat "$SHOW_ID"
+if grep -qF "the body that must remain recoverable" "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ the full body was recovered via show — the exact defect this closes\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("show did not recover the full body")
+  printf '  ✖ show did not recover the full body\n'
+fi
+refuses "show on an unknown id is refused, names where it looked" "checked unacked" \
+  -- show showseat "totally-fabricated-id-0"
+# show must also work on mail that was NEVER delivered at all (still in the raw inbox) —
+# a seat should not need to know delivery state to read a specific message by id.
+printf 'never delivered, read directly by id\n' > "$AIMAIL_ROOT/showbody2.md"
+accepts "send a second message, do not deliver it" \
+  -- send --to showseat --from showseat --subject "undelivered" --body-file "$AIMAIL_ROOT/showbody2.md"
+UNDELIVERED_ID=$(basename "$(ls "$AIMAIL_ROOT/mail/showseat/"*.md | head -1)")
+accepts "show finds it straight from the inbox, without ever calling deliver" \
+  -- show showseat "$UNDELIVERED_ID"
+if grep -qF "never delivered, read directly by id" "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ show reads directly from the inbox — delivery state is not a precondition\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("show could not read an undelivered message from the inbox")
+  printf '  ✖ show could not read an undelivered message from the inbox\n'
+fi
+
 section "where — a state, never a count"
 accepts "where finds an archived message"      -- where main ok
 # ⛔ The distinction this asserts is the whole point: `ls | wc -l` returns 0 both

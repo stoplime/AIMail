@@ -44,6 +44,11 @@ MAIL
                                              'deliver' (AIMAIL_ACK_TTL, default
                                              600s) — add --force to skip that
   aimail where <seat> <pattern>             which STATE is a message in?
+  aimail show <seat> <id>                   re-print ONE message's full body,
+                                             unconditionally — the recovery path
+                                             when a body was shown somewhere you
+                                             never actually read (e.g. a poll's
+                                             own background task-output file)
 
 POLLING
   aimail poll <seat>                        arm the wake loop (run in background)
@@ -115,6 +120,8 @@ case "$cmd" in
            s="$(seat_resolve "$1")" || exit $?; mail_deliver "$s" "${POLLER_DRAIN_MAXB:-60000}" ;;
   where)   [[ $# -ge 2 ]] || refused "usage: aimail where <seat> <pattern>"
            s="$(seat_resolve "$1")" || exit $?; mail_where "$s" "$2" ;;
+  show)    [[ $# -ge 2 ]] || refused "usage: aimail show <seat> <id>"
+           s="$(seat_resolve "$1")" || exit $?; mail_show "$s" "$2" ;;
 
   poll)    [[ $# -ge 1 ]] || refused "usage: aimail poll <seat>"
            source "$_SELF/../lib/poller.sh"; poller_run "$@" ;;
