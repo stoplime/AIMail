@@ -50,7 +50,9 @@ FLEET — who is working, who is reachable, who needs a human
   aimail fleet [seat…]                      the dashboard, with a VERDICT per seat
   aimail who                                alias for fleet
   aimail fleet sweep                        ACTIVE check: mails a supervisor about any
-                                             CRASHED/WEDGED seat, unprompted. Run from cron —
+                                             CRASHED/WEDGED seat, or one STALLED past
+                                             AIMAIL_STALL_ALERT (default 1200s), unprompted.
+                                             Run from cron —
                                              */5 * * * * aimail fleet sweep >> sweep.log 2>&1
   aimail whoami                             fresh session, no seat name yet? Looks up THIS
                                              session's registered seat and resumes it.

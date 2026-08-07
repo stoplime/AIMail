@@ -247,6 +247,23 @@ EOF
 #   cron (same shape as budget_autopilot) and it tells someone, unprompted,
 #   instead of waiting to be asked.
 #     */5 * * * * /path/to/bin/aimail fleet sweep >> ~/.aimail/state/sweep.log 2>&1
+#
+# ⛔⛔ AR-22 — STALLED WAS EXEMPT, AND THAT IS THE EXACT SHAPE OF THE OVERNIGHT
+#   INCIDENT. A poller launched outside the harness's own tracking (`&`,
+#   `nohup`, a shell that disowns it) still delivers mail and still writes a
+#   clean `hb_exit` — the heartbeat cannot tell an untracked poller from a
+#   tracked one, because "does the harness hold a task id for this" is not
+#   visible from `/proc` at all, by anyone, from outside the process. What IS
+#   visible: the poller exited with a reason, and nothing re-armed it. That is
+#   STALLED, and sweep skipped it on purpose — `case … *) continue ;;` — because
+#   a seat mid-turn looks identical for the first few minutes. MEASURED: main
+#   dead ~7h (21 queued), audit dead ~90m (5 queued), neither raised because a
+#   dashboard nobody was looking at is not a sweep. ⇒ Alert on STALLED too, but
+#   only past a threshold generous enough that a real turn never trips it —
+#   AIMAIL_STALL_ALERT, default 20 minutes, an order of magnitude past
+#   REARM_GRACE (3 min) on purpose, since REARM_GRACE exists to label the
+#   dashboard for a HUMAN reading it live, not to gate an unattended alert.
+STALL_ALERT="${AIMAIL_STALL_ALERT:-1200}"
 SWEEP_ALERT_DIR() { echo "$STATE_DIR/sweep_alerted"; }
 fleet_sweep() {
   local supervisor="${AIMAIL_SUPERVISOR:-assistant}"
@@ -263,6 +280,13 @@ fleet_sweep() {
     IFS=$'\t' read -r st detail < <(poller_state "$seat")
     case "$st" in
       CRASHED|WEDGED) : ;;   # the two states `aimail fleet` itself marks ⛔ — needs a human
+      STALLED)
+        # Past the dashboard's grace already (poller_state only returns STALLED
+        # there); gate the ALERT on a second, much longer threshold so a seat
+        # genuinely mid-task for ten minutes never pages anyone.
+        local exit_at; exit_at="$(hb_read "$seat" exit_at 2>/dev/null || echo 0)"
+        (( $(now_epoch) - exit_at < STALL_ALERT )) && continue
+        ;;
       *) continue ;;
     esac
     # ⭐ DEDUP ON THE UNDERLYING EVENT, NOT ON "still bad". Keyed on the
@@ -270,7 +294,9 @@ fleet_sweep() {
     #   crash re-sweeps silently — no repeat alert every 5 minutes for one
     #   incident — but a NEW crash, even of the same seat, even reading as the
     #   same state NAME, gets its own alert, because its (pid,beat) pair
-    #   differs from the last one that was reported.
+    #   differs from the last one that was reported. For STALLED the same pair
+    #   holds for the whole stall (nothing writes to the heartbeat again once
+    #   the poller has exited), so this reuses the identical dedup for free.
     marker="$(SWEEP_ALERT_DIR)/$seat"
     key="$st:$(hb_read "$seat" pid 2>/dev/null || echo '?'):$(hb_read "$seat" beat 2>/dev/null || echo '?')"
     [[ "$(cat "$marker" 2>/dev/null)" == "$key" ]] && continue

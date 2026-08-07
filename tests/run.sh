@@ -940,6 +940,68 @@ else
 fi
 rm -f "$AIMAIL_ROOT/state/poller/crashy.hb"
 
+section "fleet sweep — AR-22: STALLED must alert too, past a longer threshold"
+# ⛔ THE DEFECT: an untracked/orphaned poller (launched with `&`, or a shell
+#   that disowned it) still delivers mail and still writes a clean `hb_exit`
+#   — the heartbeat looks identical to a poller that is legitimately mid-turn.
+#   Sweep skipped STALLED entirely (`*) continue ;;`), so the ONLY difference
+#   between "reading mail right now" and "died 7 hours ago" was whether a
+#   human happened to run `aimail fleet`. Measured overnight: main dead ~7h,
+#   audit dead ~90m, neither raised. ⇒ alert on STALLED too, but only past
+#   AIMAIL_STALL_ALERT — an order of magnitude past REARM_GRACE — so a seat
+#   genuinely mid-task for a few minutes never pages anyone.
+accepts "register a seat that will stall silently" -- seat add stally "will stall"
+mkdir -p "$AIMAIL_ROOT/state/poller"
+rm -f "$AIMAIL_ROOT/mail/sweepvisor"/*.md   # this section counts from zero, not from AR-20's leftovers
+NOW=$(date +%s)
+printf 'pid\t777777\nppid\t1\nstarted\t%s\nbeat\t%s\nexit_at\t%s\nexit_reason\tmail\n' \
+  "$((NOW-305))" "$((NOW-305))" "$((NOW-300))" > "$AIMAIL_ROOT/state/poller/stally.hb"
+# ① inside the alert grace (300s stalled, default AIMAIL_STALL_ALERT=1200) —
+#    STALLED on the dashboard, but must generate NO alert: this is exactly the
+#    shape of a seat legitimately still mid-turn.
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep runs while stall is still inside the alert grace" -- fleet sweep
+STALL0=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( STALL0 == 0 )); then
+  PASS=$((PASS+1)); printf '  ✔ a recently-STALLED seat (inside the grace) generated NO alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("a recently-STALLED seat alerted early: got $STALL0 want 0")
+  printf '  ✖ a recently-STALLED seat alerted early — got %s message(s), want 0\n' "$STALL0"
+fi
+# ② past the alert threshold — the actual overnight shape. Same pid/beat, only
+#    exit_at moves further into the past, so this is the SAME event aging, not
+#    a new one — the dedup key must not change out from under it.
+printf 'pid\t777777\nppid\t1\nstarted\t%s\nbeat\t%s\nexit_at\t%s\nexit_reason\tmail\n' \
+  "$((NOW-1305))" "$((NOW-1305))" "$((NOW-1300))" > "$AIMAIL_ROOT/state/poller/stally.hb"
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep on a stall now past the alert threshold" -- fleet sweep
+STALL1=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( STALL1 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ a STALLED seat past the alert threshold generated exactly one unprompted alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("STALLED-past-threshold alert count: got $STALL1 want 1")
+  printf '  ✖ STALLED-past-threshold alert count: got %s, want 1\n' "$STALL1"
+fi
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep re-run on the SAME ongoing stall" -- fleet sweep
+STALL2=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( STALL2 == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ re-sweeping the SAME ongoing stall did not send a second alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("sweep re-alerted an already-reported stall: now $STALL2 messages")
+  printf '  ✖ sweep re-alerted an already-reported stall — now %s message(s)\n' "$STALL2"
+fi
+# ③ a genuinely NEW stall (different pid/beat), also past threshold, must
+#    still alert — proving the dedup is keyed on the event, not the seat name.
+printf 'pid\t666666\nppid\t1\nstarted\t%s\nbeat\t%s\nexit_at\t%s\nexit_reason\tmail\n' \
+  "$((NOW-1400))" "$((NOW-1400))" "$((NOW-1300))" > "$AIMAIL_ROOT/state/poller/stally.hb"
+AIMAIL_SUPERVISOR=sweepvisor accepts "sweep on a NEW, distinct stall" -- fleet sweep
+STALL3=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if (( STALL3 == 2 )); then
+  PASS=$((PASS+1)); printf '  ✔ a genuinely NEW stall (different pid/beat) alerted again (%s total)\n' "$STALL3"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("a new stall did not generate a new alert: got $STALL3 want 2")
+  printf '  ✖ a new stall did not generate a new alert: got %s, want 2\n' "$STALL3"
+fi
+rm -f "$AIMAIL_ROOT/state/poller/stally.hb"
+
 section "whoami — AR-21: a fresh session with no seat name yet"
 # ⛔ THE DEFECT: `resume <seat>` requires the caller to already know its own
 #   name. `whoami` closes the actual cold-start gap by reusing the SAME
