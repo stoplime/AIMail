@@ -255,12 +255,14 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("delivery reached archive/ without an ack")
   printf '  ✖ delivery reached archive/: %s un-acked, %s archived\n' "$UNACKED" "$ARCHIVED"
 fi
-accepts "un-acked mail re-surfaces on the next deliver" -- deliver main
-if grep -q '📬' "$AIMAIL_ROOT/.out"; then
-  PASS=$((PASS+1)); printf '  ✔ re-delivery re-printed the un-acked mail\n'
+# ⭐ AR-24 — un-acked mail stays VISIBLE on the next deliver, but as a summary line
+#   (📎), not a full re-print (📬): the body already printed once, for real, above.
+accepts "un-acked mail re-surfaces on the next deliver, as a summary" -- deliver main
+if grep -q '📎' "$AIMAIL_ROOT/.out" && ! grep -q '📬' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ re-delivery SUMMARIZED the un-acked mail, did not re-print its body\n'
 else
-  FAIL=$((FAIL+1)); FAILURES+=("un-acked mail was not re-printed")
-  printf '  ✖ un-acked mail was not re-printed\n'
+  FAIL=$((FAIL+1)); FAILURES+=("un-acked mail was not summarized on re-delivery")
+  printf '  ✖ un-acked mail was not summarized on re-delivery\n'
 fi
 accepts "ack archives it"                      -- ack main --all
 ARCHIVED=$(find "$AIMAIL_ROOT/mail/main/archive" -name '*.md' | wc -l)
@@ -327,6 +329,67 @@ if (( ACKG4 == 3 )); then
 else
   FAIL=$((FAIL+1)); FAILURES+=("--force did not sweep everything: got $ACKG4 want 3")
   printf '  ✖ --force did not sweep everything: got %s, want 3\n' "$ACKG4"
+fi
+
+section "deliver — AR-24: a seat that can never ack must still stay usably reachable"
+# ⛔⛔ THE DEFECT (Steffen's ruling, 2026-08-07): re-printing the FULL un-acked backlog on
+#   every wake has no escape hatch. A seat whose OWN ack is refused — for any reason,
+#   permanently — can never shrink unacked/, so every new arrival re-triggers a full
+#   reprint of an ever-growing pile. MEASURED on assistant's real seat: 27 and climbing,
+#   cost compounding with no way to ever pay it down — the rule built to guarantee mail
+#   is read guarantees the seat becomes UNREACHABLE once acking stops working at all.
+# ▶ ACCEPTANCE TEST (assistant's own ③, verbatim): a seat with N un-acked messages and NO
+#   ability to ack can still receive message N+1 — cheaply, and the old N stay VISIBLE.
+accepts "register a seat that will never ack" -- seat add neverack "acking is permanently blocked here"
+for i in $(seq 1 12); do
+  printf 'body of message %s\n' "$i" > "$AIMAIL_ROOT/nb$i.md"
+  "$AIMAIL" send --to neverack --from neverack --subject "backlog $i" --body-file "$AIMAIL_ROOT/nb$i.md" >/dev/null 2>&1
+done
+accepts "first deliver shows all 12 in full (nothing has ever been shown yet)" -- deliver neverack
+N1=$(grep -c '📬' "$AIMAIL_ROOT/.out")
+if (( N1 == 12 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 12 printed in full on the first delivery (correct one-time catch-up)\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("first delivery of backlog: got $N1 full prints, want 12")
+  printf '  ✖ first delivery of backlog: got %s full prints, want 12\n' "$N1"
+fi
+# Simulate "ack is permanently refused": simply never ack. Send message 13.
+printf 'body of message 13 — the one that must still arrive\n' > "$AIMAIL_ROOT/nb13.md"
+accepts "send message 13, with 12 un-ackable messages still outstanding" \
+  -- send --to neverack --from neverack --subject "backlog 13 — the new one" --body-file "$AIMAIL_ROOT/nb13.md"
+accepts "second deliver: message 13 arrives, the 12 are summarized, not re-printed" -- deliver neverack
+N2_FULL=$(grep -c '📬' "$AIMAIL_ROOT/.out")
+if (( N2_FULL == 1 )); then
+  PASS=$((PASS+1)); printf '  ✔ message 13 (only) printed in full — got %s full print(s)\n' "$N2_FULL"
+else
+  FAIL=$((FAIL+1)); FAILURES+=("second delivery full-print count: got $N2_FULL, want 1")
+  printf '  ✖ second delivery full-print count: got %s, want 1 (backlog leaked into a re-print)\n' "$N2_FULL"
+fi
+if grep -q "12 previously-shown message(s) remain UN-ACKED" "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ the 12 un-ackable messages are still VISIBLY reported as outstanding\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("the 12 outstanding messages were not visibly reported")
+  printf '  ✖ the 12 outstanding messages were not visibly reported (silently forgotten?)\n'
+fi
+# ⭐ Prove it does not degrade further: a THIRD delivery with nothing new must cost the
+#   same near-zero amount — the summary must not itself start re-growing into bodies.
+accepts "third deliver, nothing new: still zero full re-prints of the backlog" -- deliver neverack
+N3_FULL=$(grep -c '📬' "$AIMAIL_ROOT/.out")
+if (( N3_FULL == 0 )); then
+  PASS=$((PASS+1)); printf '  ✔ third delivery: zero full re-prints — the cost never grows back\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("third delivery re-printed $N3_FULL message body(ies)")
+  printf '  ✖ third delivery re-printed %s message body(ies) — the fix regressed under repetition\n' "$N3_FULL"
+fi
+# The receipt (AR-23) must still cover the summarized messages, so a seat that DOES
+# regain the ability to ack is not permanently locked out of ever clearing them.
+accepts "ack --all still clears the summarized backlog once acking works again" -- ack neverack --all
+ARCHIVED_NA=$(find "$AIMAIL_ROOT/mail/neverack/archive" -name '*.md' 2>/dev/null | wc -l)
+if (( ARCHIVED_NA == 13 )); then
+  PASS=$((PASS+1)); printf '  ✔ all 13 archived once ack ran — summarizing never blocked eventual acking\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("ack --all after summarizing: got $ARCHIVED_NA archived, want 13")
+  printf '  ✖ ack --all after summarizing: got %s archived, want 13\n' "$ARCHIVED_NA"
 fi
 
 section "where — a state, never a count"

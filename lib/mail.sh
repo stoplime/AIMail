@@ -212,11 +212,38 @@ _check_body_integrity() {
 # ─── Deliver (called by the poller) ───────────────────────────────────────────
 # Prints content, then moves to unacked/. NEVER to archive/.
 LAST_DELIVERED_FILE() { echo "$STATE_DIR/last_delivered/$1"; }
+# ⛔⛔ AR-24 — REPRINTING THE FULL UN-ACKED BACKLOG ON EVERY WAKE HAS NO ESCAPE HATCH
+#   (Steffen's ruling, 2026-08-07, via assistant). MEASURED on assistant's own seat: its own
+#   `ack` was refused by a permission classifier, so unacked/ could never shrink; every new
+#   arrival re-triggered a full reprint of the WHOLE growing backlog (27 and climbing), each
+#   one costing more than the last with no way to ever pay it down. ⇒ A seat that cannot ack
+#   for ANY reason — refused, crashed mid-ack, wedged — is not merely behind, it becomes
+#   PERMANENTLY UNARMABLE: the very rule built to guarantee mail is read (re-print until
+#   acked) guarantees the seat is unreachable once acking stops working at all.
+# ⭐ THE FIX IS NOT "STOP REPRINTING" (⛔ Steffen: that reopens the exact hazard the AR-23
+#   receipt guard just closed — mail archived, or now silently dropped, before anyone read
+#   it). It separates SHOWN from ACKED: a message's FULL body prints exactly ONCE ever,
+#   the first time it is queued. On every later delivery, still un-acked, it is a ONE-LINE
+#   entry in a compact summary — visibly still outstanding (②), but at near-zero cost. A
+#   seat with 27 un-acked and no ability to ack still gets message 28 in full, cheaply,
+#   forever (③) — the backlog's SIZE no longer determines whether the poller can stay useful.
+SHOWN_FILE() { echo "$STATE_DIR/shown/$1"; }
 mail_deliver() {
   local seat="$1" maxb="${2:-60000}"
-  local total=0 shown=0 deferred=0
-  local -a shown_names=()
+  local total=0 shown=0 deferred=0 summarized=0
+  local -a shown_names=() summary_names=()
+
+  # Load the persisted "shown" set, then PRUNE it to whatever is still actually in
+  # unacked/ right now — anything acked, archived, or otherwise gone drops out on its
+  # own, so this file can never grow past unacked/'s own current size.
   mkdir -p "$MAIL_DIR/$seat/unacked"
+  local -A already_shown=()
+  if [[ -f "$(SHOWN_FILE "$seat")" ]]; then
+    local _sn
+    while IFS= read -r _sn; do
+      [[ -n "$_sn" && -f "$MAIL_DIR/$seat/unacked/$_sn" ]] && already_shown["$_sn"]=1
+    done < "$(SHOWN_FILE "$seat")"
+  fi
 
   local -a queue=()
   # Oldest first — mail order is CAUSAL. A retraction must never be read before
@@ -244,7 +271,17 @@ mail_deliver() {
   local f b sz
   for f in "${queue[@]}"; do
     [[ -f "$f" ]] || continue
-    b="$(basename "$f")"; sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    b="$(basename "$f")"
+    # ⭐ AR-24 — a message already in the shown-set has been printed in full at least
+    #   once, EVER, and is still un-acked. Summarize it, never re-spend tokens on its
+    #   body — regardless of the size cap, since a one-line entry costs nothing close
+    #   to it. This is what breaks the compounding cost: the summary list grows O(1)
+    #   per message, not O(body size), and it is never gated by maxb.
+    if [[ -n "${already_shown[$b]:-}" ]]; then
+      summarized=$((summarized+1)); summary_names+=("$b")
+      continue
+    fi
+    sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
     if (( total > 0 && total + sz > maxb )); then
       deferred=$((deferred+1))
       info "⏸ DEFERRED (over ${maxb}B cap, still queued): $b"
@@ -265,23 +302,38 @@ mail_deliver() {
     fi
   done
 
-  # ⭐ AR-23 — the delivery RECEIPT `ack --all` checks against. Written every
-  #   call, even when shown=0, so a delivery that showed nothing NEW (everything
-  #   was already printed and still sitting un-acked) still records exactly what
-  #   is currently on offer — see mail_ack for why this must match exactly.
+  if (( summarized > 0 )); then
+    printf '%s\n' "────────────────────────────────────────────────────────────"
+    printf '📎 %s previously-shown message(s) remain UN-ACKED (not re-printed):\n' "$summarized"
+    printf '   %s\n' "${summary_names[@]}"
+    printf '   Run `aimail status %s` for subjects, or ack/act on them now.\n' "$seat"
+  fi
+
+  # Persist the shown-set: everything just shown in full, plus everything already
+  # in it that survived the prune at the top (still un-acked, still known).
+  mkdir -p "$(dirname "$(SHOWN_FILE "$seat")")"
+  { printf '%s\n' "${shown_names[@]}"; printf '%s\n' "${!already_shown[@]}"; } \
+    | sed '/^$/d' | sort -u > "$(SHOWN_FILE "$seat")"
+
+  # ⭐ AR-23 — the delivery RECEIPT `ack --all` checks against. Covers everything this
+  #   call told the caller about, in EITHER form (full body or summary line) — a
+  #   summarized message was still named, so acking it is still grounded in something
+  #   this delivery actually showed, not something the caller merely remembers.
   mkdir -p "$(dirname "$(LAST_DELIVERED_FILE "$seat")")"
-  printf '%s\n' "${shown_names[@]}" | sort > "$(LAST_DELIVERED_FILE "$seat")"
+  { printf '%s\n' "${shown_names[@]}"; printf '%s\n' "${summary_names[@]}"; } \
+    | sed '/^$/d' | sort -u > "$(LAST_DELIVERED_FILE "$seat")"
 
   printf '%s\n' "════════════════════════════════════════════════════════════════════"
-  info "$shown message(s) delivered. NOT YET ARCHIVED."
+  info "$shown message(s) delivered in full. NOT YET ARCHIVED."
+  (( summarized > 0 )) && info "📎 $summarized already-shown message(s) summarized above, not re-printed."
   (( deferred > 0 )) && info "⏸ $deferred deferred (size cap) — they arrive on the next poll."
   info ""
   info "▶ TWO STEPS, both required:"
   info "    1. aimail ack $seat --all      (after you have acted on them)"
   info "    2. aimail poll $seat           (re-arm; background task)"
   info ""
-  info "⚠ Un-acked mail is RE-PRINTED on every poll until you ack it. That is"
-  info "  deliberate: a delivery nobody read must not look like one that was."
+  info "⚠ A message's FULL BODY prints exactly once. Still un-acked after that, it is a"
+  info "  one-line summary on every later poll — visible, but never re-spent in full."
   return 0
 }
 

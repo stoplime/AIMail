@@ -48,6 +48,8 @@ MAIL
 POLLING
   aimail poll <seat>                        arm the wake loop (run in background)
   aimail deliver <seat>                     deliver once, no loop (for testing)
+                                             a message's FULL body prints once ever;
+                                             still un-acked later, it's a 1-line summary
 
 FLEET — who is working, who is reachable, who needs a human
   aimail fleet [seat…]                      the dashboard, with a VERDICT per seat
