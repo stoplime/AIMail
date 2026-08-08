@@ -203,9 +203,36 @@ role_whoami() {
     role_resume "$seat"
     return 0
   fi
-  unmeasurable "this session ($sid) is not registered to any seat yet" \
-    "'No mapping' is not the same claim as 'you are seat X' — do not guess." \
-    "Ask your principal which seat you are, then register AND look up in one step:" \
-    "  bash $AIMAIL_HOME/hooks/stop_guard.sh register <seat>" \
+
+  # AR-26 — the AR-21 comment above warned against "two session->seat records
+  # that can drift" and it happened anyway: a deployment can copy/rename
+  # hooks/stop_guard.sh into its own hook (different filename, wired into its
+  # OWN settings.json) rather than invoking this one, and that fork keeps its
+  # session registrations in its own state dir under its own naming
+  # convention. When that happens EVERY seat reads as unregistered here even
+  # though a hook has tracked every session all along — measured on this
+  # deployment: `$STATE_DIR/stopguard/` had zero files ever written into it,
+  # while the deployment's actual Stop hook had dozens of live seat_<sid>
+  # mappings. Check an opt-in external mapping before giving up, so a forked
+  # hook's registrations are not invisible to `whoami`.
+  if [[ -n "${AIMAIL_EXTERNAL_SEAT_DIR:-}" ]]; then
+    local ext="$AIMAIL_EXTERNAL_SEAT_DIR/seat_$sid"
+    if [[ -f "$ext" ]]; then
+      local seat; seat="$(cat "$ext")"
+      ok "this session ($sid) is registered as seat '$seat' (via AIMAIL_EXTERNAL_SEAT_DIR)"
+      role_resume "$seat"
+      return 0
+    fi
+  fi
+
+  local -a detail=(
+    "'No mapping' is not the same claim as 'you are seat X' — do not guess."
+    "Ask your principal which seat you are, then register AND look up in one step:"
+    "  bash $AIMAIL_HOME/hooks/stop_guard.sh register <seat>"
     "  aimail whoami"
+  )
+  [[ -n "${AIMAIL_EXTERNAL_SEAT_DIR:-}" ]] && detail+=(
+    "(also checked AIMAIL_EXTERNAL_SEAT_DIR: $AIMAIL_EXTERNAL_SEAT_DIR/seat_$sid — not found there either)"
+  )
+  unmeasurable "this session ($sid) is not registered to any seat yet" "${detail[@]}"
 }

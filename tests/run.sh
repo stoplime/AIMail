@@ -1194,6 +1194,50 @@ else
 fi
 unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
 
+section "whoami — AR-26: a deployment's OWN stop hook keeps its OWN session->seat mapping"
+# ⛔ THE DEFECT: a deployment can fork/rename hooks/stop_guard.sh into its own
+#   hook (wired into ITS settings.json under a different filename) instead of
+#   invoking this one — exactly the "two session->seat records that can
+#   drift" AR-21's own comment warned about. When that happens, EVERY seat
+#   reads as unregistered here even though the deployment's real hook has
+#   tracked every session all along. AIMAIL_EXTERNAL_SEAT_DIR is the bridge.
+export CLAUDE_CODE_SESSION_ID=selftest-whoami-ext-sid
+unset AIMAIL_EXTERNAL_SEAT_DIR
+unmeasurable_test "no external dir configured, nothing registered either way" \
+  "not registered to any seat" -- whoami
+accepts "register a seat for the external-mapping test" -- seat add extwhoseat "test"
+printf '# handover\nDONE: external whoami test.\n' > "$AIMAIL_ROOT/whext.md"
+accepts "write it a handover" -- role write extwhoseat "$AIMAIL_ROOT/whext.md"
+export AIMAIL_EXTERNAL_SEAT_DIR="$AIMAIL_ROOT/external-hook-state"
+mkdir -p "$AIMAIL_EXTERNAL_SEAT_DIR"
+unmeasurable_test "external dir configured but this session has no file in it" \
+  "not registered to any seat" -- whoami
+printf 'extwhoseat' > "$AIMAIL_EXTERNAL_SEAT_DIR/seat_selftest-whoami-ext-sid"
+accepts "whoami falls back to the external mapping and resumes it" -- whoami
+if grep -q "registered as seat 'extwhoseat'" "$AIMAIL_ROOT/.out" && \
+   grep -q 'RESUME: extwhoseat' "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ external mapping resolved AND resumed, in one command\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("whoami did not fall back to AIMAIL_EXTERNAL_SEAT_DIR")
+  printf '  ✖ whoami did not fall back to AIMAIL_EXTERNAL_SEAT_DIR\n'
+fi
+# AR-26b — aimail's OWN mapping must still win if both exist (never let a
+# fallback silently override the primary source of truth).
+mkdir -p "$AIMAIL_ROOT/state/stopguard"
+printf 'extwhoseat' > "$AIMAIL_ROOT/state/stopguard/session.selftest-whoami-ext-sid"
+accepts "seat add for the primary-wins seat" -- seat add primaryseat "test"
+printf 'primaryseat' > "$AIMAIL_ROOT/state/stopguard/session.selftest-whoami-ext-sid"
+printf '# handover\nDONE.\n' > "$AIMAIL_ROOT/whprim.md"
+accepts "write it a handover" -- role write primaryseat "$AIMAIL_ROOT/whprim.md"
+accepts "whoami prefers its OWN mapping over the external one when both exist" -- whoami
+if grep -q "registered as seat 'primaryseat'" "$AIMAIL_ROOT/.out"; then
+  PASS=$((PASS+1)); printf '  ✔ own mapping wins over the external fallback\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("external fallback wrongly overrode aimail's own mapping")
+  printf '  ✖ external fallback wrongly overrode aimail'"'"'s own mapping\n'
+fi
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID AIMAIL_EXTERNAL_SEAT_DIR
+
 section "doctor"
 accepts "doctor runs"                          -- doctor
 
