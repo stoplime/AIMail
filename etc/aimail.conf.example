@@ -19,6 +19,12 @@ AIMAIL_POLL_INTERVAL="${AIMAIL_POLL_INTERVAL:-5}"
 # ⇒ The cap costs throughput, never correctness.
 POLLER_DRAIN_MAXB="${POLLER_DRAIN_MAXB:-60000}"
 
+# If this deployment's actual Stop hook is NOT hooks/stop_guard.sh (e.g. it was
+# forked/renamed and wired into settings.json under a different filename),
+# point `whoami` at that hook's own session->seat state dir so its
+# registrations aren't invisible here too (AR-26). Expects seat_<sid> files.
+# AIMAIL_EXTERNAL_SEAT_DIR="/path/to/that/hook/state/dir"
+
 # ─── Budget ───────────────────────────────────────────────────────────────────
 # Per-account session caps, as percentages. An account not listed uses DEFAULT.
 #
