@@ -135,8 +135,8 @@ mail_send() {
     # loser's integrity check re-read the WINNER's body, mismatched, and removed it.
     # A message also lives on in unacked/ and archive/<shard>/, so a path free in the
     # inbox is not proof the id is unused.
-    local dest="" n=0 claimed=0
-    while :; do
+    local dest="" n=0 claimed=0 tries=0
+    while (( tries++ < 1000 )); do        # FI-61: bounded — never spin on an unwritable inbox
       local cand="$MAIL_DIR/$t/${id}${n:+-$n}.md" base
       base="$(basename "$cand" .md)"
       if [[ -e "$cand" ]] \
@@ -146,8 +146,31 @@ mail_send() {
       fi
       # O_EXCL create — the only test-and-claim that is atomic between processes.
       if (set -o noclobber; : > "$cand") 2>/dev/null; then dest="$cand"; claimed=1; break; fi
+      # FI-61: the create failed though the path was free. If $cand EXISTS now it was a
+      # race (another sender claimed it between our -e check and the create) -> retry.
+      # If it still does NOT exist, the inbox itself cannot be written (unwritable dir /
+      # disk-full / quota) and retrying would spin FOREVER, hanging the whole send — so
+      # fail LOUD instead of wedging the channel every seat depends on.
+      # ⚠ CHOSEN TRADEOFF, not an oversight: if a third process REMOVES $cand between the
+      # failed create and this re-check, a genuine collision reads as "absent" and we die
+      # a spurious FALSE-LOUD. That is the correct direction to err — a spurious failure
+      # is recoverable (re-send), a spin is not (it wedges the shared channel) — and the
+      # bounded backstop below covers the inverse. DO NOT "fix" this to retry-on-absent:
+      # that reintroduces FI-61's infinite spin on a real unwritable/full inbox.
+      if [[ ! -e "$cand" ]]; then
+        rm -f "$body"
+        die "cannot write to seat '$t' inbox ($MAIL_DIR/$t) — unwritable or disk-full; aborted (FI-61). Recipients before '$t' may already be delivered (FI-60)."
+      fi
       n=$((n+1))
     done
+    # FI-61 backstop — a SECOND, INDEPENDENT guard, and deliberately UNREACHABLE in
+    # practice. The discriminator above already fails loud on a real unwritable/full
+    # inbox (the path stays absent), so this bound is NOT the protection for that case.
+    # It guards a DIFFERENT one: a genuine 1000-deep id-collision storm — 1000 messages
+    # sharing the same second+from+subject stem — which cannot occur in practice. That
+    # unreachability IS the point: a bound on a formerly-unbounded loop must never spin
+    # even in the impossible case. ⛔ NOT dead code — do not delete it as "unreachable".
+    [[ $claimed -eq 1 ]] || { rm -f "$body"; die "could not claim a destination for '$t' after 1000 attempts — aborted (FI-61 backstop)."; }
     {
       printf -- '---\n'
       printf 'id: %s\n' "$(basename "$dest" .md)"
