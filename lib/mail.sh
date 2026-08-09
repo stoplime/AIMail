@@ -454,9 +454,10 @@ mail_where() {
     # Not "0 messages" — a claim about where we looked.
     unmeasurable "no message matching '${pattern}' anywhere in seat '$seat'" \
       "Searched: inbox, unacked/, and every archive shard." \
-      "This means it was never written to this seat — NOT that it was consumed." \
-      "If you expected it here, check the sender's resolved recipient:" \
-      "  aimail seat list"
+      "This means NO FILENAME matched the pattern — NOT that the seat is empty. The pattern" \
+      "is a filename GLOB, not a regex: use '' to match everything; a bare '.' matches only" \
+      "names with a literal dot (usually just the .md), so it finds nothing on a full inbox." \
+      "If you expected a hit, widen the pattern or check the resolved recipient: aimail seat list"
   fi
   local h
   for h in "${hits[@]}"; do

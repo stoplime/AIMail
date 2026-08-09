@@ -78,7 +78,7 @@ seat_resolve() {
 
   local status; status="$(seat_field "$canon" 2)"
   if [[ "$status" == "retired" ]]; then
-    refused "seat '$canon' is RETIRED — nothing was sent." \
+    refused "seat '$canon' is RETIRED — no active reader (any existing mail is orphaned/unreadable)." \
       "$(seat_field "$canon" 4)" \
       "A retired seat has no reader. Send to its successor instead."
   fi

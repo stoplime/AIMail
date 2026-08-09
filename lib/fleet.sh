@@ -219,6 +219,13 @@ fleet_report() {
         verdict="NOT STARTED — no poller has ever run for this seat" ;;
     esac
     [[ "$stop_d" == BLOCK* ]] && verdict="$verdict  ⚠ last stop was BLOCKED"
+    # FI-58: retirement-aware. A retired seat has no reader, so its inbox count is
+    # ORPHANED (unreadable), never live QUEUED, and it is not "startable". Without
+    # this it falls to the NEVER case -> "NOT STARTED", which reads as a new seat you
+    # can start. Mirror of the retired guard `sweep` already uses below.
+    if [[ "$(seat_field "$seat" 2)" == "retired" ]]; then
+      verdict="RETIRED — no reader; ${q} file(s) ORPHANED (unreadable), not live QUEUED"
+    fi
     printf '%-16s %-11s %-10s %6s %6s  %s\n' "$seat" "$st" "$ago" "$q" "$u" "$verdict"
   done
 
