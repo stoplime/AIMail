@@ -166,7 +166,13 @@ mail_send() {
     # The previous delivery check counted FILES and reported 5/5 for mail whose
     # every code block had been deleted. This compares the delivered body's
     # digest against the source's. A delivery count is not an integrity check.
-    local got; got="$(sed -n '/^---$/,/^---$/!p' "$dest" | sed '1{/^$/d}' | sha256sum | cut -d' ' -f1)"
+    # FI-54: strip the frontmatter by COUNTING delimiters, not by a sed range. The old
+    # `sed -n '/^---$/,/^---$/!p'` re-opened a fresh range on any later bare `---`, so a
+    # body containing a horizontal rule had everything after it swallowed -> false digest
+    # mismatch -> a correct message deleted, failing closed with a misleading "integrity
+    # failure". The frontmatter is always exactly the first TWO `---` lines; print only
+    # what follows the 2nd, and a body `---` is body (seen>=2) not a delimiter.
+    local got; got="$(awk 'seen>=2{print} /^---$/{seen++}' "$dest" | sed '1{/^$/d}' | sha256sum | cut -d' ' -f1)"
     if [[ "$got" != "$sha" ]]; then
       # ⛔ Remove ONLY what this process claimed. The old unconditional `rm -f "$dest"`
       # deleted whatever occupied the path; under a race that was another sender's
