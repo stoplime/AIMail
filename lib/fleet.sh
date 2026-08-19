@@ -180,7 +180,16 @@ last_stop() {
 fleet_report() {
   local -a seats=()
   if (( $# )); then local s; for s in "$@"; do seats+=("$(seat_resolve "$s")") || exit $?; done
-  else while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done < <(seat_names); fi
+  else
+    # Default view (no seat args): the six active fleet seats, not the full
+    # registry. seat_names() also returns retired rows (drywall,
+    # insulation-report, roofing, steffen) and active-but-never-run rows
+    # (backend, aimail-port) that clutter the dashboard nobody asked to see.
+    # An explicit `aimail fleet <seat>` still resolves against the full
+    # registry above, unaffected.
+    local -a canon=(assistant main audit code-review framing foundation)
+    local s; for s in "${canon[@]}"; do seat_exists "$s" && seats+=("$s"); done
+  fi
 
   (( ${#seats[@]} == 0 )) && unmeasurable "no seats registered — there is no fleet to report on" \
     "This is an empty address space, not an idle fleet."

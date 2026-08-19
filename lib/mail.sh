@@ -212,6 +212,24 @@ mail_send() {
   ok "delivered to ${#delivered[@]} seat(s), ${bytes}B each"
   local d; for d in "${delivered[@]}"; do info "   ${d%%:*}  ${d#*:}"; done
   info "verified: body sha256 ${sha:0:12}… matches in every copy"
+
+  # ─── A DELIVERY TO A SEAT NOBODY READS IS A SILENT SUCCESS ───────────────────
+  # `backend` and `aimail-port` were registered `active` with SIX and THREE queued
+  # messages and no poller had EVER run for either: a send wrote the file, reported
+  # delivery and verified the digest, and nothing would ever read it. That is worse
+  # than a retired seat, whose state is at least legible — an `active` seat READS AS
+  # A LIVE ADDRESS. One of the absorbed messages was Steffen's own deprecation ruling,
+  # broadcast and reported as delivered to the fleet.
+  # The discriminator is the poller HEARTBEAT FILE, not the ARMED state: a heartbeat
+  # exists once a seat has EVER polled and survives the poller exiting on delivery, so
+  # this fires on NEVER-READ seats and stays silent for a seat merely between polls.
+  # Warning only — it must never affect delivery, which has already completed above.
+  local _t _hb
+  for _t in "${resolved[@]}"; do
+    _hb="$STATE_DIR/poller/${_t}.hb"
+    [[ -e "$_hb" ]] && continue
+    warn "'${_t}' is registered active but NO POLLER HAS EVER RUN for it — this message was written and will NOT be read. Retire the seat, or start a reader."
+  done
 }
 
 # _check_body_integrity — catch the corruption signature BEFORE it is delivered.
