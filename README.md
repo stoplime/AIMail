@@ -237,3 +237,23 @@ suite and a shared trunk; nothing here replaces them yet.
 
 [docs/PORTING.md](docs/PORTING.md) maps every known defect to prevented, partial,
 or not-yet-ported, and lists the regressions not to reintroduce.
+
+---
+
+## ⚠ KNOWN ISSUES — `docs/ISSUES_2026-08-19.md`
+
+After the fleet went silent twice on the night of 2026-08-18/19, every defect and UX trap found was
+compiled into **[`docs/ISSUES_2026-08-19.md`](docs/ISSUES_2026-08-19.md)** — technical and
+design/user-error alike, since a design that makes an error easy is a defect too.
+
+**Read it before changing anything in `poller.sh`, `fleet.sh`, or the budget path.** Two items matter
+most:
+- **A1/A2** — a clean exit can report `CRASHED`, the one verdict that pages a human (9 false, 0 true
+  in one night). ⛔ The cause is **not settled**, and the heartbeat file **overwrites its own
+  evidence**, so any fix must start by capturing what the check actually saw.
+- **B1** — a stop order that ends with "stop" leaves a seat **unreachable**, and there is **no
+  automated recovery** (B2). This is what silenced five seats.
+
+⛔ **And the standing caution, learned the hard way:** `aimail` is the only channel between seats. A
+bad patch here does not cause a false alarm — **it causes silence.** Fix it in daylight, with someone
+watching, and never mid-incident.
