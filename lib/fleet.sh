@@ -181,14 +181,29 @@ fleet_report() {
   local -a seats=()
   if (( $# )); then local s; for s in "$@"; do seats+=("$(seat_resolve "$s")") || exit $?; done
   else
-    # Default view (no seat args): the six active fleet seats, not the full
-    # registry. seat_names() also returns retired rows (drywall,
-    # insulation-report, roofing, steffen) and active-but-never-run rows
-    # (backend, aimail-port) that clutter the dashboard nobody asked to see.
-    # An explicit `aimail fleet <seat>` still resolves against the full
-    # registry above, unaffected.
-    local -a canon=(assistant main audit code-review framing foundation)
-    local s; for s in "${canon[@]}"; do seat_exists "$s" && seats+=("$s"); done
+    # Default view (no seat args): every seat the registry does NOT mark
+    # `retired`. A retired row is kept deliberately (see lib/registry.sh) so a
+    # message to it can name its successor, but it has no reader and does not
+    # belong on a dashboard of who is working.
+    #
+    # This is the same filter `budget.sh` and `role.sh` already apply, so the
+    # three agree on what "the fleet" means rather than each keeping its own
+    # list. ⛔ Do NOT hardcode seat names here: this file ships to other fleets
+    # whose seats are not these, and a fixed roster silently omits theirs.
+    #
+    # AIMAIL_FLEET_SEATS overrides with an explicit space-separated list for
+    # anyone who wants a narrower default. An explicit `aimail fleet <seat>`
+    # resolves against the FULL registry above either way, unaffected.
+    local s
+    if [[ -n "${AIMAIL_FLEET_SEATS:-}" ]]; then
+      for s in $AIMAIL_FLEET_SEATS; do seat_exists "$s" && seats+=("$s"); done
+    else
+      while IFS= read -r s; do
+        [[ -n "$s" ]] || continue
+        [[ "$(seat_field "$s" 2)" == "retired" ]] && continue
+        seats+=("$s")
+      done < <(seat_names)
+    fi
   fi
 
   (( ${#seats[@]} == 0 )) && unmeasurable "no seats registered — there is no fleet to report on" \

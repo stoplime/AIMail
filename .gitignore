@@ -16,3 +16,10 @@ etc/aimail.conf
 # NEVER published: they are operational detail about a private project and name
 # real people. PORTING.md restates every mechanism from them in generic terms.
 docs/source_*.md
+
+# Operational logs and incident write-ups from the fleet actually running this.
+# NEVER published: they name real people, real projects, and specific plans.
+# Generic mechanisms belong in README.md or docs/PORTING.md instead — restated,
+# not linked. (docs/source_*.md above is the same rule, older.)
+docs/ISSUES_*.md
+docs/bp*_*.md

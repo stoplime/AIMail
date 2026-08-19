@@ -240,20 +240,27 @@ or not-yet-ported, and lists the regressions not to reintroduce.
 
 ---
 
-## ⚠ KNOWN ISSUES — `docs/ISSUES_2026-08-19.md`
+## ⚠ KNOWN ISSUES — read before changing the poller, the fleet view, or the budget path
 
-After the fleet went silent twice on the night of 2026-08-18/19, every defect and UX trap found was
-compiled into **[`docs/ISSUES_2026-08-19.md`](docs/ISSUES_2026-08-19.md)** — technical and
-design/user-error alike, since a design that makes an error easy is a defect too.
+Three failure modes have been observed in production use. None is fully fixed; each is recorded here
+because the symptom is misleading enough to send the next person the wrong way.
 
-**Read it before changing anything in `poller.sh`, `fleet.sh`, or the budget path.** Two items matter
-most:
-- **A1/A2** — a clean exit can report `CRASHED`, the one verdict that pages a human (9 false, 0 true
-  in one night). ⛔ The cause is **not settled**, and the heartbeat file **overwrites its own
-  evidence**, so any fix must start by capturing what the check actually saw.
-- **B1** — a stop order that ends with "stop" leaves a seat **unreachable**, and there is **no
-  automated recovery** (B2). This is what silenced five seats.
+- **A clean exit can report `CRASHED`.** That is the one verdict meaning "no exit record — a human
+  must intervene", so a false positive pages someone for nothing. Observed nine times in one night
+  with zero true positives. ⛔ The cause is **not settled**, and the heartbeat file **overwrites its
+  own evidence** on the next poll — so any fix must begin by capturing what the check actually saw,
+  before changing what it does.
 
-⛔ **And the standing caution, learned the hard way:** `aimail` is the only channel between seats. A
-bad patch here does not cause a false alarm — **it causes silence.** Fix it in daylight, with someone
-watching, and never mid-incident.
+- **A stop instruction that ends with "stop" leaves a seat unreachable.** The poller exits on
+  delivery; a seat that stops without re-arming has no reader, and mail to it is written, verified,
+  and never seen. There is **no automated recovery** — nothing can wake a seat that cannot receive.
+  ▶ Any stop procedure must end with *re-arm, then stop*, in that order.
+
+- **An `active` seat with no reader accepts mail silently.** Delivery succeeds, the digest verifies,
+  and nothing ever reads it. `mail_send` now warns when a recipient has no poller heartbeat, but the
+  underlying registry state is still legal — retire the seat, or start a reader.
+
+⛔ **The standing caution, learned the hard way:** for a fleet using it, `aimail` is the *only*
+channel between seats. A bad patch here does not produce a false alarm — **it produces silence**, and
+silence is indistinguishable from everyone being busy. Change it in daylight, with someone watching,
+and never in the middle of an incident.

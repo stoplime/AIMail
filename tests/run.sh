@@ -332,7 +332,7 @@ else
 fi
 
 section "deliver — AR-24: a seat that can never ack must still stay usably reachable"
-# ⛔⛔ THE DEFECT (Steffen's ruling, 2026-08-07): re-printing the FULL un-acked backlog on
+# ⛔⛔ THE DEFECT (operator ruling, 2026-08-07): re-printing the FULL un-acked backlog on
 #   every wake has no escape hatch. A seat whose OWN ack is refused — for any reason,
 #   permanently — can never shrink unacked/, so every new arrival re-triggers a full
 #   reprint of an ever-growing pile. MEASURED on assistant's real seat: 27 and climbing,

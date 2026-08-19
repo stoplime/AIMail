@@ -169,7 +169,7 @@ migrate_run() {
     # Archive → month shards, keyed on mtime.
     # ⛔⛔ TRAVERSE EVERY SUBDIRECTORY, NOT JUST `archive/`. The first version read
     #    `$src/$seat/archive` only, and a real mailbox turned out to have a
-    #    SECOND archive directory — `roofing/_archive/` — holding 12 genuine
+    #    SECOND archive directory — `<seat>/_archive/` — holding 12 genuine
     #    messages that were silently skipped. The migration reported success.
     # ⭐ THAT IS THIS PROJECT'S OWN DEFECT CLASS, committed by its own migrator:
     #    a directory whose name nobody standardised becomes a black hole, and the

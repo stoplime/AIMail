@@ -214,12 +214,12 @@ mail_send() {
   info "verified: body sha256 ${sha:0:12}… matches in every copy"
 
   # ─── A DELIVERY TO A SEAT NOBODY READS IS A SILENT SUCCESS ───────────────────
-  # `backend` and `aimail-port` were registered `active` with SIX and THREE queued
-  # messages and no poller had EVER run for either: a send wrote the file, reported
-  # delivery and verified the digest, and nothing would ever read it. That is worse
-  # than a retired seat, whose state is at least legible — an `active` seat READS AS
-  # A LIVE ADDRESS. One of the absorbed messages was Steffen's own deprecation ruling,
-  # broadcast and reported as delivered to the fleet.
+  # Two seats were registered `active` with several queued messages each and no
+  # poller had EVER run for either: a send wrote the file, reported delivery and
+  # verified the digest, and nothing would ever read it. That is worse than a
+  # retired seat, whose state is at least legible — an `active` seat READS AS A
+  # LIVE ADDRESS. One message absorbed that way was an operator ruling, broadcast
+  # and reported as delivered to the whole fleet.
   # The discriminator is the poller HEARTBEAT FILE, not the ARMED state: a heartbeat
   # exists once a seat has EVER polled and survives the poller exiting on delivery, so
   # this fires on NEVER-READ seats and stays silent for a seat merely between polls.
@@ -260,14 +260,14 @@ _check_body_integrity() {
 # Prints content, then moves to unacked/. NEVER to archive/.
 LAST_DELIVERED_FILE() { echo "$STATE_DIR/last_delivered/$1"; }
 # ⛔⛔ AR-24 — REPRINTING THE FULL UN-ACKED BACKLOG ON EVERY WAKE HAS NO ESCAPE HATCH
-#   (Steffen's ruling, 2026-08-07, via assistant). MEASURED on assistant's own seat: its own
+#   (operator ruling, 2026-08-07). MEASURED on a live supervisor seat: its own
 #   `ack` was refused by a permission classifier, so unacked/ could never shrink; every new
 #   arrival re-triggered a full reprint of the WHOLE growing backlog (27 and climbing), each
 #   one costing more than the last with no way to ever pay it down. ⇒ A seat that cannot ack
 #   for ANY reason — refused, crashed mid-ack, wedged — is not merely behind, it becomes
 #   PERMANENTLY UNARMABLE: the very rule built to guarantee mail is read (re-print until
 #   acked) guarantees the seat is unreachable once acking stops working at all.
-# ⭐ THE FIX IS NOT "STOP REPRINTING" (⛔ Steffen: that reopens the exact hazard the AR-23
+# ⭐ THE FIX IS NOT "STOP REPRINTING" (⛔ ruled: that reopens the exact hazard the AR-23
 #   receipt guard just closed — mail archived, or now silently dropped, before anyone read
 #   it). It separates SHOWN from ACKED: a message's FULL body prints exactly ONCE ever,
 #   the first time it is queued. On every later delivery, still un-acked, it is a ONE-LINE
