@@ -173,6 +173,11 @@ print("1" if d.get("stop_hook_active") else "0")
     # Fail open: unmapped session. We do not guess which seat this is — guessing
     # is how a block lands on the wrong session.
     [[ -z "$seat" ]] && { _log "unmapped" "allow-unmapped"; exit 0; }
+    # Superseded session (R6(e)/(g)): the seat record retired THIS session id -> the seat moved on; this
+    # session left aimail and no hook may force it to re-arm a poller. Fail open, say why.
+    if [[ -f "$STATE_DIR/seat_account/$seat" ]] && awk -F'\t' -v s="$(_sid)" '$1=="retired_sessions" { v=$2; sub(/^[a-z]+:/, "", v); sub(/@.*$/, "", v); if (v==s) found=1 } END{exit !found}' "$STATE_DIR/seat_account/$seat" 2>/dev/null; then
+      _log "$seat" "allow-superseded"; exit 0
+    fi
     [[ -f "$GUARD_DIR/enabled" ]] || { _log "$seat" "allow-disarmed"; exit 0; }
     [[ -f "$GUARD_DIR/exempt.$seat" ]] && { _log "$seat" "allow-exempt"; exit 0; }
 

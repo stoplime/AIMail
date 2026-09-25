@@ -40,6 +40,7 @@ status_report() {
 
 doctor() {
   local problems=0
+  supervisor_alert_banner || true
   info "$(instrument_id)"
   info "root: $AIMAIL_ROOT"
   echo
@@ -96,6 +97,67 @@ doctor() {
   (( expired == 0 )) && ok "no expired state markers"
   problems=$((problems+expired))
 
+  # ─── Landing guard resolvability (t908) ─────────────────────────────────────
+  # A symlinked reference-transaction hook whose target is gone, or a core.hooksPath
+  # into a directory that no longer exists, makes git run NO hooks — silently. Say so.
+  source "$AIMAIL_LIB/landingguard.sh" 2>/dev/null || true
+  if command -v landing_guard_report >/dev/null 2>&1; then
+    landing_guard_report; local lg_problems=$?
+    problems=$((problems+lg_problems))
+  else
+    warn "landingguard.sh not loadable — landing-guard check skipped"; problems=$((problems+1))
+  fi
+
+  # ─── Pre-push sterility guard resolvability ──────────────────────────────────
+  # Same silent-gap shape as the landing guard above: a real, tracked, falsified
+  # hook script is not the same claim as it being live in .git/hooks/pre-push.
+  source "$AIMAIL_LIB/pushguard.sh" 2>/dev/null || true
+  if command -v push_guard_report >/dev/null 2>&1; then
+    push_guard_report; local pg_problems=$?
+    problems=$((problems+pg_problems))
+  else
+    warn "pushguard.sh not loadable — push-guard check skipped"; problems=$((problems+1))
+  fi
+
+  # ─── Commit-msg sterility guard resolvability ────────────────────────────────
+  # Same shape as the pre-push check above, for hooks/sterility_commit_msg_guard.sh
+  # (2026-09-24: shipped once already without its executable bit -- reachable but
+  # never actually fires once installed, until this check exists to catch it).
+  if command -v commit_msg_guard_report >/dev/null 2>&1; then
+    commit_msg_guard_report; local cmg_problems=$?
+    problems=$((problems+cmg_problems))
+  else
+    warn "pushguard.sh not loadable — commit-msg-guard check skipped"; problems=$((problems+1))
+  fi
+
+  # ─── Sterility (this fleet's own operator/company/project terms never leaking
+  # into the shared source) ───────────────────────────────────────────────────
+  if command -v sterility_report >/dev/null 2>&1; then
+    local ster_out; ster_out="$(sterility_report)"; local ster_rc=$?
+    if [[ -n "$ster_out" ]]; then
+      printf '%s\n' "$ster_out"
+      problems=$((problems+ster_rc))
+    elif [[ -n "${AIMAIL_STERILITY_TERMS:-}" ]]; then
+      ok "sterility: tracked tree is clean against its configured terms"
+    else
+      ok "sterility: no terms configured (AIMAIL_STERILITY_TERMS unset) — nothing checked"
+    fi
+  else
+    warn "sterility.sh not loadable — sterility check skipped"; problems=$((problems+1))
+  fi
+
+  # ─── Sterility: commit identity, existing history (informational only) ─────
+  # NEVER counted into `problems` -- a hit here is about ALREADY-PUBLISHED commits, which
+  # only the owner can rewrite (force-push), never a seat. This is visibility, not a gate;
+  # see lib/sterility.sh's own header on sterility_scan_history.
+  if command -v sterility_scan_history >/dev/null 2>&1; then
+    local hist_out; hist_out="$(sterility_scan_history)"; local hist_rc=$?
+    if [[ "$hist_rc" -gt 0 ]]; then
+      warn "sterility: $hist_rc commit(s) in history carry a configured term in their author/committer identity (not a gate -- rewriting published history is the owner's call alone):"
+      printf '%s\n' "$hist_out" | sed 's/^/   /'
+    fi
+  fi
+
   # ─── Dependencies ───────────────────────────────────────────────────────────
   local dep
   for dep in awk sed find sha256sum stat date; do
@@ -104,6 +166,6 @@ doctor() {
   ok "core dependencies present"
 
   echo
-  if (( problems == 0 )); then ok "doctor: 0 problems found (checks run: version-control, data-root, registry, stray-dirs, markers, deps)"
-  else warn "doctor: $problems problem(s) found across 6 check groups"; return 1; fi
+  if (( problems == 0 )); then ok "doctor: 0 problems found (checks run: version-control, data-root, registry, stray-dirs, markers, landing-guard, sterility, deps)"
+  else warn "doctor: $problems problem(s) found across 8 check groups"; return 1; fi
 }

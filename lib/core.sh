@@ -61,6 +61,28 @@ refused() {
   exit 3
 }
 
+# _dash_arg_guard <usage-line> -- "$@" — call as the FIRST line of a
+# state-changing subcommand that takes no meaningful positional/flag
+# arguments of its own (budget night/day/ramp/checkpoint). Only inspects
+# $1: prints <usage-line> and exits 0 (nothing changed) when it is -h or
+# --help; refuses (exit 3, nothing changed) when it starts with '-' and is
+# neither. Returns normally, without exiting, for anything else (including
+# no args at all) — the caller proceeds with its own logic unmodified.
+# ⛔ 2026-09-25 (assistant, HIGH, mail 20260925T082038): `aimail budget park
+#   --help` parked the whole account with reason "--help" (a real incident,
+#   the librarian hit it live, 08:19). budget_park's own reason text is
+#   free-form so it keeps a bespoke guard (see lib/budget.sh) rather than
+#   this one, but every sibling subcommand that takes NO free-text argument
+#   at all shares this exact check, added here rather than copy-pasted per
+#   caller.
+_dash_arg_guard() {
+  local usage="$1"; shift
+  case "${1:-}" in
+    -h|--help) info "$usage"; info "  Nothing was changed."; exit 0 ;;
+    -*) refused "'$1' is not a recognized argument here." "$usage" "Nothing was changed." ;;
+  esac
+}
+
 # unmeasurable — the instrument ran and could not produce a reading. Exit 4.
 # ⛔ NEVER substitute 0 here. "Unmeasurable" and "zero" are different claims and
 #    zero reads as safe in whichever direction happens to be dangerous.
@@ -78,6 +100,21 @@ unmeasurable() {
 #    with each other cannot be caught by inspection.
 # ⇒ These read the system clock. `mail.sh` refuses a caller-supplied date.
 now_epoch() { date +%s; }
+
+# ccusage_cmd — the ONE place that decides how the ccusage CLI is invoked. Prints the command
+# words on one line (callers split them into an array) or returns 1 when nothing can run it.
+#   1. AIMAIL_CCUSAGE_BIN (a test seam or an explicit path)
+#   2. a `ccusage` on PATH (the global install: 2026-09-22 the owner/assistant -- `npx -y
+#      ccusage@latest` re-resolved the package from npm and spawned a fresh node on EVERY call,
+#      measured at ~390% CPU per burst; the autopilot cron plus per-seat probes made it a real
+#      share of the machine's load, load 27 on 16 threads, swap full)
+#   3. `npx --yes ccusage@latest` -- the fallback, for a machine without the install
+ccusage_cmd() {
+  if [[ -n "${AIMAIL_CCUSAGE_BIN:-}" ]]; then echo "$AIMAIL_CCUSAGE_BIN"; return 0; fi
+  if command -v ccusage >/dev/null 2>&1; then echo ccusage; return 0; fi
+  if command -v npx >/dev/null 2>&1; then echo "npx --yes ccusage@latest"; return 0; fi
+  return 1
+}
 now_iso()   { date '+%Y-%m-%dT%H:%M:%S%z'; }
 now_stamp() { date '+%Y%m%dT%H%M%S'; }
 
@@ -92,6 +129,18 @@ age_min() {
 
 # ─── Filesystem ───────────────────────────────────────────────────────────────
 ensure_dirs() { mkdir -p "$MAIL_DIR" "$STATE_DIR" "$AIMAIL_ROOT/tmp"; }
+
+# supervisor_scan_touch — hooks/supervisor_guard.sh's marker. Called by the dashboard
+# commands (fleet, budget pool, budget balance); touches $STATE_DIR/supervisor_scan ONLY
+# when the invoking session is registered (stop_guard.sh) as the supervisor seat, so the
+# supervisor's Stop hook can tell "looked recently" from "did not". Any other session:
+# no-op. Never fails the caller.
+supervisor_scan_touch() {
+  local sid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; [[ -n "$sid" ]] || return 0
+  local f="$STATE_DIR/stopguard/session.$sid"; [[ -f "$f" ]] || return 0
+  [[ "$(head -1 "$f" 2>/dev/null | tr -d '[:space:]')" == "${AIMAIL_SUPERVISOR:-assistant}" ]] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null && touch "$STATE_DIR/supervisor_scan" 2>/dev/null || true
+}
 
 # atomic_write <dest> — reads stdin, writes via a temp file on the SAME
 # filesystem, then renames.
@@ -132,4 +181,18 @@ instrument_id() {
   dirty=""
   git -C "$AIMAIL_HOME" diff --quiet 2>/dev/null || dirty="+dirty"
   printf 'aimail %s (%s%s)' "$AIMAIL_VERSION" "$rev" "$dirty"
+}
+
+# ─── supervisor-unreachable alert (lib/watchdog.sh writes it; session/fleet/doctor print it) ──
+# ⛔ The one state that has no other channel: the supervisor seat is dead or wedged past a ramp
+#   and the cron wake could not bring it back. Nothing that depends on the supervisor's own
+#   session can report this, so every seat's own dashboard prints it FIRST until it is cleared
+#   (`aimail fleet supervisor-ack`, or the watchdog clearing it on a verified wake).
+SUPERVISOR_ALERT_FILE() { echo "$STATE_DIR/ALERT_supervisor_unreachable"; }
+supervisor_alert_banner() {
+  local f; f="$(SUPERVISOR_ALERT_FILE)"
+  [[ -f "$f" ]] || return 0
+  warn "⛔⛔ SUPERVISOR UNREACHABLE — $(head -1 "$f")"
+  sed -n '2,6p' "$f" | sed 's/^/     /' >&2
+  warn "   (details: $f — whoever reads this first runs the wake command it names, then clears it)"
 }

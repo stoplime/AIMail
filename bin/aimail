@@ -35,6 +35,22 @@ SEATS (the address space — a name is only an address if it is registered)
   aimail seat retire <name> [successor]     stop accepting mail, say what to use
   aimail seat unretire <name> [desc]        reverse a mistaken/stale retirement — back to active
   aimail seat resolve <name>                what would this name deliver to?
+  aimail seat confirm <seat> [--model <id>]  from INSIDE the seat's own session: record
+                                             the account, session id and model it is
+                                             CERTAIN of (the persisted seat record;
+                                             docs/cli_account_migration.md)
+  aimail seat record <seat> | records        that record, one seat / every seat
+  aimail seat locate <seat>                  where the seat's session is RIGHT NOW,
+                                             from outside: claude agents --json across
+                                             the account pool, by session id
+  aimail seat migrate <seat> <account>       move a seat's background session to another
+  aimail seat sessions [seat]              per-seat/per-account session registry (auto-updated by confirm/migrate)
+  aimail seat set-session <seat> <acct> <sid> --why <r>   override a seat's session for an account (logged)
+  aimail seat reset-session <seat> <acct> --why <r>       clear it so the next launch records anew (logged)
+                                             account: locate → handover → claude stop
+                                             (verified gone) → relaunch → settle →
+                                             re-verify → record. --dry-run prints the
+                                             commands. NEVER `kill <pid>` a session.
 
 MAIL
   aimail send --to <seat> [--to <seat>…] --from <seat> --subject <s> --body-file <p>
@@ -49,6 +65,16 @@ MAIL
                                              when a body was shown somewhere you
                                              never actually read (e.g. a poll's
                                              own background task-output file)
+  aimail unread <seat>                      list what's un-acked right now — id,
+                                             sender, subject, size — so you never
+                                             have to grep unacked/ by hand to find
+                                             an id for `show`
+  aimail recent <seat> [N]                  last N ids (and subjects) this seat
+                                             has EVER seen, acked or not — durable
+                                             across ack/archive, unlike `unread`
+                                             above (default N=20). Recovery is
+                                             `aimail recent <seat>` -> pick an id
+                                             -> `aimail show <seat> <id>`.
 
 POLLING
   aimail poll <seat>                        arm the wake loop (run in background)
@@ -66,27 +92,170 @@ FLEET — who is working, who is reachable, who needs a human
                                              */5 * * * * aimail fleet sweep >> sweep.log 2>&1
   aimail whoami                             fresh session, no seat name yet? Looks up THIS
                                              session's registered seat and resumes it.
+  aimail session [seat]                     RUN THIS FIRST, every new session. Checks every
+                                             place a seat's reachability can silently drift —
+                                             budget mode, role handover, poller state,
+                                             stop_guard.sh registration, AND any project-local
+                                             Stop hook fork (a SEPARATE registration a seat can
+                                             hold with stop_guard.sh but not with the fork —
+                                             confirmed live 2026-09-03: every Stop fired,
+                                             every one silently allow-unregistered, for hours).
+                                             Read-only — reports and prints fix commands,
+                                             registers/arms nothing itself.
+  aimail sessions [seat…] [--json]          PER-SESSION liveness, where every other view
+                                             here is PER-SEAT-NAME. One row per registered
+                                             session, each judged on its OWN evidence: its
+                                             own claude process, its own transcript, and
+                                             the poller that actually descends from it.
+                                             Separates a session that is alive and working
+                                             (poller down between cycles — normal) from one
+                                             that is alive but deaf, from one that is
+                                             genuinely gone, from a registration file left
+                                             by a session that ended days ago.
+  aimail sessions --prune                   remove ONLY the registrations proven to belong
+                                             to ended sessions (no process, no transcript
+                                             activity for AIMAIL_SESSION_STALE_AFTER).
+                                             DEAD sessions are never pruned — a dead seat
+                                             is the finding a human still has to see.
+  aimail context [seat…] [--json]           each LIVE session's own current context size —
+                                             input + cache_creation + cache_read tokens off
+                                             the LAST real assistant turn in its own
+                                             transcript, never estimated. Fleet cost is
+                                             ~all cache reads, so this is which seats are
+                                             costing the most per turn, right now.
+  aimail context --settings                 does every known account's own settings.json
+                                             carry `autoCompactWindow`? Report only, never
+                                             writes — setting the value stays a per-account
+                                             decision.
+
+  aimail ask add --owner <seat> --quote "<owner's words>" --next "<step>"
+                 --check '<shell predicate>' [--rank N]
+                                             open an ASK: a task the owner asked for that is
+                                             never silently dropped. `--check` decides when
+                                             it closes on its own (ask sweep, cron every 10
+                                             min); a literal 'false' means it closes only on
+                                             the owner's verdict (WAITING-ON-OWNER, never
+                                             stale-escalated). There is no `ask done`.
+  aimail ask touch <id> --by <seat> --state "<where it stands>"
+                 [--evidence <ref>] [--next "<step>"] [--waiting-on <who>|'']
+                                             a CURRENT-STATE snapshot; also ends the row's
+                                             stale episode (one stale mail per episode).
+                                             --waiting-on <who> exempts a REAL (non-`false`)
+                                             check from stale mail/escalation without
+                                             touching the check itself -- the row still
+                                             auto-closes the moment its check passes; who is
+                                             free text (very often a human, never registered
+                                             as a seat). --waiting-on '' clears it.
+  aimail ask list [--owner <seat>] [--stale] [--all]   ask show <id>
+  aimail ask digest [<who>]                 every row blocked --waiting-on someone, one line
+                                             each -- the "what's still owed" view a stale
+                                             mail per row per episode was replaced with.
+  aimail ask withdraw <id> --owner-approved "<quote>"   the ONE manual close
+  aimail ask sweep                          cron: runs each open row's check, closes on
+                                             exit 0, mails stale rows once per episode, and
+                                             at 2x the stale window appends one line to
+                                             AIMAIL_OWNER_INBOX if set.
+  aimail ask import [<seed.tsv>]            seed rows (ids preserved, existing ids skipped)
+  aimail ask stale-for <seat> | counts <seat>   internal readers (the gate, the fleet,
+                                             the handover, the boot check)
+
+⚠ THE CLAIM GATE REFUSES A STALE OWNER. `gateclaim.sh <key> <seat> …` refuses
+  a new claim by a seat that owns a stale open ask, naming the row — this is
+  how "a newer task drops the older ones" becomes impossible by default.
+  `--preempt-ok "<owner quote>"` records the quote on the row and proceeds.
+  Never applies to `--release`, `--list`, `--canon`.
+
+  aimail land <repo-path> <ref> <sha> --from <seat>
+                                             the ONE way to move a shared ref: locks
+                                             (repo,ref), re-reads the LIVE tip inside the
+                                             lock, refuses unless it is a real fast-forward,
+                                             moves with the 3-arg update-ref (expected-old =
+                                             the tip just read), verifies, and prints the
+                                             log/stat for the landing mail. Never
+                                             materializes a working tree — `git checkout
+                                             <sha> -- <paths>` in the shared checkout is a
+                                             separate, path-scoped step.
+
+  aimail claims [seat…]                     is each held GATECLAIM entry's own holder
+                                             still demonstrably advancing it? State is a
+                                             property of the (seat, claim) PAIR, never of
+                                             the seat alone: DOWN (holder's heartbeat pid
+                                             is dead), WORKING (a live process in the
+                                             claim's own worktree, or a recent commit/mail
+                                             naming its key), BLOCKED (a typed referent —
+                                             gate:/lock:/seat:/human:/landing: — checked
+                                             live for dangling or a cycle every read), or
+                                             STUCK (alive, held, not blocked, no evidence
+                                             past AIMAIL_CLAIM_STUCK_SECONDS — never
+                                             auto-released, only ever surfaced for a
+                                             human/orchestrator). A seat holding zero
+                                             claims reads IDLE or DOWN on its own.
+  aimail claims block <key> <seat> <ref>     record why a claim is legitimately paused —
+                                             only its own holder may set this.
+  aimail claims unblock <key> <seat>         clear it.
 
 ⚠ A poller being down does NOT mean a seat is down. Between a poller firing and
   the seat re-arming, the seat is READING ITS MAIL. `fleet` reports that as
   RE-ARMING, not DOWN, for AIMAIL_REARM_GRACE seconds. Only CRASHED — no exit
   record at all — means a human is needed.
 
+⛔ AND `fleet` COUNTS SEATS, NOT SESSIONS. A seat with four concurrent sessions
+  has ONE heartbeat file, ONE row and ONE verdict; a seat whose only session
+  died looks identical to one whose session is heads-down mid-build. When the
+  question is "which SESSION is alive", `aimail sessions` is the instrument —
+  `fleet` cannot answer it and now says so in its own output.
+
 BUDGET — keyed on the block BOUNDARY, which is measurable
   aimail budget status                      block, last callout (with its age), schedule
   aimail budget callout <pct>               record a /usage reading — the only true level
+  aimail budget history [--all]             every recorded session+weekly reading, in order
   aimail budget checkpoint [--now]          ask every seat to write ROLE.md
   aimail budget park [reason] | ramp        set/clear the throttle flag
+  aimail budget unpark <seat> [--reason]    exempt ONE seat from the current park
   aimail budget autopilot                   the cron entry point (checkpoint→park→ramp)
+  aimail budget watch [interval=30]         LOOP (not cron): probe + seat-check every
+                                             seat each interval, mail the supervisor once
+                                             per OK→HALT crossing. Run supervised, foreground
+                                             or as a tracked background task — dies with
+                                             whatever started it, same as any other loop.
+  aimail budget night | day                 toggle the day/night cap mode (see watch above);
+                                             per-seat overrides are unaffected either way
   aimail budget account                     which account, and its cap
+  aimail budget seats [--window 3h]         per-seat weighted token cost per account
+  aimail budget warnings [--dry-run]         the 50/80 crossings (block, weekly, fable-model) +
+                                             projected cap-hit, one mail per (account, gauge,
+                                             level, window); cron runs it inside budget autopilot
+  aimail budget act [status|cancel --why <r>|tick]  announce-then-do balancer (AIMAIL_BALANCE_ACT=1):
+                                             the pending move, cancel it, or run one tick
+                                             (state/seat_usage.tsv, from ccusage session,
+                                             reconciled against the account block: MEASURED
+                                             or UNMEASURED, never zero)
+  aimail budget balance                     account pressure (burn / sustainable), the
+                                             arming streak, and what the balancer WOULD
+                                             recommend -- read-only, no marker, no mail
+                                             (docs/load_balancer_design_2026-09-21.md §5:
+                                             a full weekly cycle of readings comes first)
+  aimail budget seats-tick | balance-tick   the two steps the autopilot tick runs
 
 ⛔ PARK IS NOT DISARM. Pollers sleep on the throttle flag and wake themselves at
   the ramp. A disarmed poller also costs nothing and NEVER wakes — only a human
   can restart it. Never tell a seat to disarm.
 
+⚠ UNPARK IS PER-SEAT, NOT FLEET-WIDE, AND VOUCHES FOR NOTHING. It un-blocks one
+  seat's poller for the current park only (expires the instant a NEW park
+  begins); it makes no claim that seat is actually under-cap. See it in
+  `aimail budget status`'s own THROTTLE section.
+
 STATUS
   aimail status [seat]                      queues, un-acked, registry health
   aimail doctor                             check this installation
+  aimail landing-guard [repo ...]           is the main-only landing guard installed + resolvable? (--selftest)
+  aimail push-guard [repo ...]              is the pre-push sterility guard installed + resolvable? (--selftest)
+  aimail commit-msg-guard [repo ...]        is the commit-msg sterility guard installed + resolvable? (--selftest)
+  aimail budget placement [seat]            T-917 placement rules: the per-account report, or the eligible accounts for <seat>, best first
+  aimail fleet supervisor-check | supervisor-ack   one supervisor liveness/wake tick (cron runs it inside fleet watchdog) | clear the alert
+  aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--force]   weekly-cap move of ONE seat: resume its prior session on the account with headroom, model pinned (the supervisor keeps its old session alive)
+  aimail fleet supervisor-handover [--act] [--target <acct>] [--sid <id>] [--force]   budget handover of the supervisor seat: resume its prior session on the account with headroom, old kept alive off aimail
   aimail migrate <old-mailbox> [--dry-run]  import an existing mailbox
   aimail version
 
@@ -110,7 +279,32 @@ case "$cmd" in
       resolve) [[ $# -ge 1 ]] || refused "usage: aimail seat resolve <name>"
                r="$(seat_resolve "$1")" || exit $?
                ok "'$1' delivers to '$r'" ;;
-      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | unretire | resolve" ;;
+      # ─── account/session record + migration (lib/seatmigrate.sh) ───
+      confirm) [[ $# -ge 1 ]] || refused "usage: aimail seat confirm <seat> [--model <id>]  (run from INSIDE the seat's own session)"
+               source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/seatmigrate.sh"
+               ensure_dirs; seat_confirm "$@" ;;
+      record)  [[ $# -ge 1 ]] || refused "usage: aimail seat record <seat>"
+               source "$_SELF/../lib/seatmigrate.sh"; seat_record_show "$1" ;;
+      records) source "$_SELF/../lib/seatmigrate.sh"; seat_records_list ;;
+      # ─── per-seat/per-account session registry (the owner 2026-09-22): auto-updated by confirm/migrate ───
+      sessions) source "$_SELF/../lib/seatmigrate.sh"; seat_sessions_show "${1:-}" ;;
+      set-session) [[ $# -ge 3 ]] || refused "usage: aimail seat set-session <seat> <account> <sid> [--model <id>] --why \"<reason>\" [--by <label>]"
+               source "$_SELF/../lib/seatmigrate.sh"; ensure_dirs; seat_set_session "$@" ;;
+      reset-session) [[ $# -ge 2 ]] || refused "usage: aimail seat reset-session <seat> <account> --why \"<reason>\" [--by <label>]"
+               source "$_SELF/../lib/seatmigrate.sh"; ensure_dirs; seat_reset_session "$@" ;;
+      locate)  [[ $# -ge 1 ]] || refused "usage: aimail seat locate <seat>"
+               source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/seatmigrate.sh"
+               seat_session_locate "$1"; rc=$?
+               case "$rc" in 0) ;; 1) refused "seat locate: nothing found for '$1' (no live listing, no poller instance, no seat record)" ;;
+                 2) unmeasurable "seat locate: the live-session listing is UNKNOWN (an account dir did not answer)" ;;
+                 3) refused "seat locate: '$1' is live under more than one session/account (twins) — see the twin lines above" ;; esac ;;
+      migrate) [[ $# -ge 2 ]] || refused "usage: aimail seat migrate <seat> <target-account> [--model <id>] [--from <seat>] [--dry-run] [--fresh --why <reason>] …  (default: RESUME the seat's own session, transcript carried; --fresh is explicit only)"
+               source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/mail.sh"; source "$_SELF/../lib/role.sh" 2>/dev/null || true
+               source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"; ensure_dirs; seat_migrate "$@" ;;
+      launch)  [[ $# -ge 2 ]] || refused "usage: aimail seat launch <seat> <account> [--model <id>] [--cwd <dir>] [--prompt-file <p>]"
+               source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh" 2>/dev/null || true
+               source "$_SELF/../lib/seatmigrate.sh"; ensure_dirs; seat_launch "$@" ;;
+      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | unretire | resolve | confirm | record | records | sessions | set-session | reset-session | locate | migrate | launch" ;;
     esac ;;
 
   send)    ensure_dirs; mail_send "$@" ;;
@@ -122,18 +316,57 @@ case "$cmd" in
            s="$(seat_resolve "$1")" || exit $?; mail_where "$s" "$2" ;;
   show)    [[ $# -ge 2 ]] || refused "usage: aimail show <seat> <id>"
            s="$(seat_resolve "$1")" || exit $?; mail_show "$s" "$2" ;;
+  unread)  [[ $# -ge 1 ]] || refused "usage: aimail unread <seat>"
+           s="$(seat_resolve "$1")" || exit $?; mail_unread "$s" ;;
+  recent)  [[ $# -ge 1 ]] || refused "usage: aimail recent <seat> [N]"
+           s="$(seat_resolve "$1")" || exit $?; mail_recent "$s" "${2:-20}" ;;
 
   poll)    [[ $# -ge 1 ]] || refused "usage: aimail poll <seat>"
            source "$_SELF/../lib/poller.sh"; poller_run "$@" ;;
+  poll-persistent)
+           [[ $# -ge 1 ]] || refused "usage: aimail poll-persistent <seat>"
+           source "$_SELF/../lib/poller.sh"; poller_run_persistent "$@" ;;
 
   fleet|who)
+    supervisor_scan_touch
            source "$_SELF/../lib/fleet.sh"
+           source "$_SELF/../lib/ask.sh"   # the ASKS column (ask_counts)
            if [[ "${1:-}" == "sweep" ]]; then shift; fleet_sweep "$@"
+           elif [[ "${1:-}" == "watchdog" ]]; then
+             shift
+             source "$_SELF/../lib/budget.sh"      # ACCOUNT_CONFIG_DIR, _autopilot_seat_groups, account_id
+             source "$_SELF/../lib/watchdog.sh"
+             fleet_watchdog_sessions "$@"
+             fleet_watchdog_supervisor          # the supervisor liveness + wake step (the owner 2026-09-22)
+             source "$_SELF/../lib/placement.sh"; source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"
+             supervisor_handover_due_announce   # the budget handover trigger (the owner 2026-09-23): announce, act only with AIMAIL_HANDOVER_ACT=1
+           elif [[ "${1:-}" == "supervisor-ack" ]]; then
+             source "$_SELF/../lib/watchdog.sh"; supervisor_alert_clear
+           elif [[ "${1:-}" == "supervisor-handover" ]]; then
+             shift
+             source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh"
+             source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"; ensure_dirs
+             supervisor_handover "$@"
+           elif [[ "${1:-}" == "budget-move" ]]; then
+             shift; [[ $# -ge 1 ]] || refused "usage: aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--force]"
+             source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh"
+             source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"; ensure_dirs
+             _bm_seat="$1"; shift; seat_budget_move --seat "$_bm_seat" "$@"
+           elif [[ "${1:-}" == "supervisor-check" ]]; then
+             source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/watchdog.sh"; fleet_watchdog_supervisor
            else fleet_report "$@"; fi ;;
+  # M1 discovery primitive (twin-seat coordination, increment 0,
+  # docs/twin_seat_coordination_design_2026-09-18.md): without this, no live
+  # instance of a seat knows a twin exists at all.
+  instances)
+           [[ $# -ge 1 ]] || refused "usage: aimail instances <seat>"
+           source "$_SELF/../lib/fleet.sh"
+           s="$(seat_resolve "$1")" || exit $?; instances_list "$s" ;;
   migrate) source "$_SELF/../lib/migrate.sh"; migrate_run "$@" ;;
 
   role)
     source "$_SELF/../lib/role.sh"
+    source "$_SELF/../lib/ask.sh"   # role_write appends the seat's own open asks between markers
     sub="${1:-}"; shift || true
     case "$sub" in
       show)  [[ $# -ge 1 ]] || refused "usage: aimail role show <seat>"
@@ -156,26 +389,155 @@ case "$cmd" in
   whoami)
     source "$_SELF/../lib/role.sh"; role_whoami ;;
 
+  session)
+    source "$_SELF/../lib/role.sh"
+    source "$_SELF/../lib/fleet.sh"
+    source "$_SELF/../lib/budget.sh" 2>/dev/null || true
+    source "$_SELF/../lib/ask.sh"    # the "── ASKS ($seat) ──" section
+    source "$_SELF/../lib/session.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then session_selftest
+    else session_check "${1:-}"; fi ;;
+
+  # ⚠ DELIBERATELY A SEPARATE VERB FROM `session`, not a flag on it. `session`
+  #   answers "is THIS session set up correctly" (one session, many checks);
+  #   `sessions` answers "which sessions exist and which are alive" (many
+  #   sessions, one check). Collapsing them would give one verb two subjects,
+  #   which is how the predecessor's `gate.sh who` became a lock holder.
+  sessions)
+    source "$_SELF/../lib/sessions.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then sessions_selftest
+    else sessions_report "$@"; fi ;;
+
+  # ⚠ ANSWERS A DIFFERENT QUESTION AGAIN: not "is this session alive"
+  #   (`session`) nor "which sessions exist" (`sessions`), but "how much is
+  #   THIS turn costing" -- a live session's own current context size, read
+  #   from its transcript, never estimated. See lib/context_readout.py's own
+  #   header for why (cache-read cost) and lib/sessions.sh::context_report
+  #   for the exact reading. `--settings` checks every known account's own
+  #   settings.json for `autoCompactWindow` instead (report only, never
+  #   writes).
+  context)
+    source "$_SELF/../lib/sessions.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then
+      python3 "$_SELF/../lib/context_readout.py" --selftest
+    elif [[ "${1:-}" == "--settings" ]]; then
+      context_settings_check
+    else
+      context_report "$@"
+    fi ;;
+
+  # ⚠ THE ASK LEDGER (lib/ask.sh): a task the owner asked for is never silently
+  #   dropped. seat_resolve (registry.sh) and mail_send (mail.sh) are already
+  #   sourced unconditionally above; ask.sh needs nothing further.
+  ask)
+    source "$_SELF/../lib/ask.sh"
+    ask_dispatch "$@" ;;
+
+  # ⚠ THE ONE WAY TO MOVE A SHARED REF (lib/land.sh) — see its own header for
+  #   the race this replaces. Never materializes a working tree.
+  land)
+    source "$_SELF/../lib/land.sh"
+    land_run "$@" ;;
+
+  # ⚠ ANSWERS A DIFFERENT QUESTION FROM BOTH `sessions` (which SESSIONS are
+  #   alive) and `fleet` (which SEATS are reachable): which GATECLAIM entries
+  #   exist, and is each one's own holder still demonstrably advancing it.
+  #   State is a property of the (seat, claim) PAIR — see lib/claimstate.sh's
+  #   own header for why a per-seat reading was rejected.
+  claims)
+    source "$_SELF/../lib/fleet.sh"
+    source "$_SELF/../lib/claimstate.sh"
+    sub="${1:-}"
+    case "$sub" in
+      block)   shift; [[ $# -ge 3 ]] || refused "usage: aimail claims block <key> <seat> <referent>" \
+                 "referent is typed: gate:<key> | lock:<name> | seat:<name> | human:<name> | landing:<sha>"
+               claim_set_blocked "$1" "$2" "$3" ;;
+      unblock) shift; [[ $# -ge 2 ]] || refused "usage: aimail claims unblock <key> <seat>"
+               claim_clear_blocked "$1" "$2" ;;
+      *) claims_report "$@" ;;
+    esac ;;
+
   budget)
     source "$_SELF/../lib/budget.sh"
     sub="${1:-status}"; shift || true
     case "$sub" in
       status)     budget_status ;;
+      pool)       supervisor_scan_touch; budget_pool ;;
+      pick)       p="$(budget_pick_account_live "$@")" && info "pick: $p" \
+                    || refused "no eligible account among the candidates" \
+                         "Every candidate is either parked, or (after a fresh on-demand probe of any" \
+                         "stale/unmeasured one) genuinely at/over its own weekly cap." \
+                         "  aimail budget pool     — see each account's current state" ;;
+      recommend-migration)
+                  [[ $# -ge 1 ]] || refused "usage: aimail budget recommend-migration <seat>"
+                  budget_recommend_migration "$1" ;;
       callout)    budget_callout "$@" ;;
+      probe)      budget_probe ;;
+      history)    budget_history "$@" ;;
+      seat-check) [[ $# -ge 1 ]] || refused "usage: aimail budget seat-check <seat>"
+                  budget_seat_check "$1" ;;
       block)      source "$_SELF/../lib/budget.sh"
                   b="$(block_field end)" || unmeasurable "no active 5-hour block could be read"
                   info "block ends $(date -d "@$b" '+%F %H:%M') ($(( (b - $(now_epoch))/60 )) min)" ;;
       park)       budget_park "$@" ;;
-      ramp)       budget_ramp ;;
+      ramp)       budget_ramp "$@" ;;
+      unpark)     budget_unpark "$@" ;;
       checkpoint) budget_checkpoint "${1:-}" ;;
       autopilot)  budget_autopilot ;;
+      watch)      budget_watch "${1:-30}" ;;
+      night)      budget_night "$@" ;;
+      day)        budget_day "$@" ;;
       account)    info "account: $(account_id)    cap: $(account_cap)%" ;;
+      # ─── load balancer (lib/balance.sh; docs/load_balancer_design_2026-09-21.md) — READ-ONLY cut ───
+      seats)      source "$_SELF/../lib/balance.sh"; budget_seats "$@" ;;
+      warnings)   source "$_SELF/../lib/placement.sh" 2>/dev/null || true; source "$_SELF/../lib/warnings.sh"; budget_warnings "$@" ;;
+      act)        source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; source "$_SELF/../lib/placement.sh"; source "$_SELF/../lib/act.sh"; budget_act "$@" ;;
+      seats-tick) source "$_SELF/../lib/balance.sh"; ensure_dirs; seat_usage_tick "${1:-}" ;;
+      balance)    supervisor_scan_touch; source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; budget_balance "$@" ;;
+      balance-tick) source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; ensure_dirs; balance_evaluate ;;
       *) refused "unknown 'budget' subcommand: '${sub}'" \
-           "Try: status | callout <pct> | block | checkpoint | park | ramp | autopilot | account" ;;
+           "Try: status | pool | pick | recommend-migration <seat> | callout <pct> | probe | history [--all] | seat-check <seat> | block | checkpoint | park | ramp | unpark | autopilot | watch | night | day | account" ;;
     esac ;;
 
   status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
-  doctor)  source "$_SELF/../lib/status.sh"; doctor ;;
+  # landing-guard [repo ...] — one line per repo: is hooks/main_only_landing_guard.sh
+  #   installed AND resolvable there (t908: a dangling hooksPath/symlink runs no hooks,
+  #   silently). Also a section of `session` and `doctor`; --selftest drives real git.
+  landing-guard)
+    source "$_SELF/../lib/landingguard.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then landing_guard_selftest
+    else
+      if [[ $# -ge 1 ]]; then AIMAIL_LANDING_GUARD_REPOS="$*"; export AIMAIL_LANDING_GUARD_REPOS; fi
+      landing_guard_report; exit $?
+    fi ;;
+  # push-guard [repo ...] — one line per repo: is hooks/sterility_push_guard.sh
+  #   installed AND resolvable as pre-push there? (--selftest). Also a section of
+  #   `session` and `doctor`.
+  push-guard)
+    source "$_SELF/../lib/pushguard.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then push_guard_selftest
+    else
+      if [[ $# -ge 1 ]]; then AIMAIL_PUSH_GUARD_REPOS="$*"; export AIMAIL_PUSH_GUARD_REPOS; fi
+      push_guard_report; exit $?
+    fi ;;
+  # commit-msg-guard [repo ...] — one line per repo: is hooks/sterility_commit_msg_guard.sh
+  #   installed AND resolvable as commit-msg there? (--selftest). Also a section of
+  #   `session` and `doctor`.
+  commit-msg-guard)
+    source "$_SELF/../lib/pushguard.sh"
+    if [[ "${1:-}" == "--selftest" ]]; then commit_msg_guard_selftest
+    else
+      if [[ $# -ge 1 ]]; then AIMAIL_PUSH_GUARD_REPOS="$*"; export AIMAIL_PUSH_GUARD_REPOS; fi
+      commit_msg_guard_report; exit $?
+    fi ;;
+  doctor)  source "$_SELF/../lib/status.sh"; source "$_SELF/../lib/sterility.sh"; doctor ;;
+  placement) # alias of `budget placement`
+    source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/placement.sh"
+    if [[ -n "${1:-}" ]]; then
+      # every account with its verdict for THIS seat (OK/REFUSE + why), then the pick; exit 0 always
+      _pls="$1"; for _pla in $(_pl_accounts); do printf '  %-10s %s\n' "$_pla" "$(placement_check_move "$_pls" "$_pla" 2>/dev/null | tr '\t' ' ' || true)"; done
+      _plp="$(placement_pick "$_pls" 2>/dev/null || true)"; printf '  pick: %s\n' "${_plp:-none (no eligible account)}"
+    else placement_report; fi ;;
 
   version) info "$(instrument_id)"; info "root: $AIMAIL_ROOT" ;;
   help|--help|-h|"") usage ;;

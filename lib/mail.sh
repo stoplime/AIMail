@@ -39,6 +39,10 @@ mail_send() {
 
   while (( $# )); do
     case "$1" in
+      -h|--help)
+        info "usage: aimail send --to <seat> [--to <seat>...] --from <seat> --subject <s> --body-file <p>"
+        info "  Body may also arrive on stdin in place of --body-file. Nothing was sent."
+        exit 0 ;;
       --to)        to+=("$2"); shift 2 ;;
       --from)      from="$2"; shift 2 ;;
       --subject)   subject="$2"; shift 2 ;;
@@ -79,6 +83,29 @@ mail_send() {
   # The sender must itself be registered — otherwise a reply has nowhere to go.
   from="$(seat_resolve "$from")" || exit $?
 
+  # ⛔ R6(h) SENDER IDENTITY (2026-09-23, after two mails sent under a seat's name by processes that
+  #   were not the seat's own turn): when the calling process carries a session id AND the seat
+  #   record names a registered session, they must agree. A ghost of a superseded session, a twin,
+  #   or a session writing as another seat is refused here, by name. FAIL-OPEN, on purpose: no
+  #   session id in the environment (cron, a human's shell, a script) or no seat record (a seat
+  #   that never confirmed) changes nothing. A fork or subagent inside the seat's own process
+  #   inherits the seat's session id and is NOT distinguishable here -- the fleet rule against
+  #   forks remains the control for that case; this check does not claim to cover it.
+  #   AIMAIL_SEND_IDENTITY_CHECK=0 is the kill switch (default on; never a dark switch).
+  if [[ "${AIMAIL_SEND_IDENTITY_CHECK:-1}" != "0" ]]; then
+    local _snd_sid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}" _snd_rec="$STATE_DIR/seat_account/$from" _snd_rsid=""
+    if [[ -n "$_snd_sid" && -f "$_snd_rec" ]]; then
+      _snd_rsid="$(awk -F'\t' '$1=="session_id"{print $2; exit}' "$_snd_rec")"
+      if [[ -n "$_snd_rsid" && "$_snd_rsid" != "$_snd_sid" ]]; then
+        refused "send: this session (${_snd_sid:0:8}) is NOT the registered '$from' session (${_snd_rsid:0:8}) -- not sending under that name." \
+          "A mail must come from the seat's own registered session (aimail seat sessions $from)." \
+          "If THIS session is the seat now: aimail seat confirm $from --model <id>  (from this session), then resend." \
+          "If this is a superseded or twin session: stop; it does not speak for the seat." \
+          "Kill switch, a human's decision only: AIMAIL_SEND_IDENTITY_CHECK=0."
+      fi
+    fi
+  fi
+
   # Body: file or stdin. Never an argument.
   local body; body="$(mktemp "$AIMAIL_ROOT/tmp/body.XXXXXX")"
   if [[ -n "$body_file" ]]; then
@@ -90,6 +117,19 @@ mail_send() {
     cat > "$body"
   fi
   [[ -s "$body" ]] || { rm -f "$body"; refused "the body is empty — nothing was sent."; }
+
+  # ⛔⛔ CANONICALIZE THE TRAILING NEWLINE HERE, ONCE, AT INTAKE — never weaken the
+  # integrity comparison downstream instead (fable's ruling, 2026-08-31). The source
+  # sha below is computed on these raw bytes, but the post-delivery integrity check
+  # (line ~198) re-extracts the body via `awk 'seen>=2{print}...'`, and awk's own ORS
+  # always appends a trailing newline to the last printed record regardless of
+  # whether the input had one — so a body file missing its final newline round-trips
+  # with one EXTRA byte the source digest never saw, and "INTEGRITY FAILURE ...
+  # digest != source digest" fired 100% of the time. Appending it here, before the
+  # source digest is ever computed, makes the source and the awk-recovered copy
+  # agree by construction for every body from now on — the comparison itself stays
+  # exactly as strict as it was.
+  [[ "$(tail -c1 "$body")" == $'\n' ]] || printf '\n' >> "$body"
 
   _check_body_integrity "$body" "$force" || { rm -f "$body"; exit 3; }
 
@@ -135,7 +175,29 @@ mail_send() {
     # loser's integrity check re-read the WINNER's body, mismatched, and removed it.
     # A message also lives on in unacked/ and archive/<shard>/, so a path free in the
     # inbox is not proof the id is unused.
-    local dest="" n=0 claimed=0 tries=0
+    #
+    # ⛔⛔ SENDER-VS-DELIVERER (found 2026-09-10, poll-persistent pilot): the fix for
+    # the above (noclobber-touch an EMPTY file to claim the path, fill it in
+    # afterward via `atomic_write`) is atomic against another SENDER but not against
+    # a concurrent DELIVERER — `mail_deliver` treats any file it can `cat` as real
+    # mail, and an empty file `cat`s successfully (exit 0, prints nothing). A
+    # deliverer that reads the claimed-but-not-yet-filled path in that gap moves the
+    # EMPTY file into unacked/ and counts it delivered; when this sender's own fill
+    # step later runs, the destination no longer has anything there to overwrite (the
+    # deliverer took it), so the fill just recreates the path fresh with the real
+    # content — leaving a permanently-empty orphan in unacked/ and the real content
+    # stranded, unmoved, back in the inbox. Reproduced deterministically (forced delay
+    # in the claim->fill gap, 20/20 trials empty in the fixed version's absence) —
+    # confirmed live 2026-09-10 17:10 on a real send (`20260910T171046-...`), 0 bytes
+    # in unacked/, full content landed back in the inbox under the same id.
+    # FIX: build the full, final content in a temp file FIRST — nothing is visible
+    # under the candidate name yet, no matter how long composing it takes — then
+    # claim the path with `ln`: one syscall that either creates the name WITH its
+    # full content already present, or fails EEXIST leaving nothing behind. There is
+    # no intermediate state left for a concurrent deliverer to observe, which closes
+    # this regardless of why any particular send was slow between claim and fill (the
+    # same pattern Maildir delivery uses: write to a temp name, `link` it into place).
+    local dest="" n=0 claimed=0 tries=0 tmp=""
     while (( tries++ < 1000 )); do        # FI-61: bounded — never spin on an unwritable inbox
       local cand="$MAIL_DIR/$t/${id}${n:+-$n}.md" base
       base="$(basename "$cand" .md)"
@@ -144,19 +206,44 @@ mail_send() {
          || compgen -G "$MAIL_DIR/$t/archive/*/$base.md" >/dev/null 2>&1; then
         n=$((n+1)); continue
       fi
-      # O_EXCL create — the only test-and-claim that is atomic between processes.
-      if (set -o noclobber; : > "$cand") 2>/dev/null; then dest="$cand"; claimed=1; break; fi
-      # FI-61: the create failed though the path was free. If $cand EXISTS now it was a
-      # race (another sender claimed it between our -e check and the create) -> retry.
-      # If it still does NOT exist, the inbox itself cannot be written (unwritable dir /
-      # disk-full / quota) and retrying would spin FOREVER, hanging the whole send — so
-      # fail LOUD instead of wedging the channel every seat depends on.
+      # Build this candidate's full content (the id: line embeds its own basename)
+      # before anything is visible under that name at all.
+      tmp="$(mktemp "$MAIL_DIR/$t/.tmp.XXXXXX" 2>/dev/null)" || {
+        rm -f "$body"
+        die "cannot write to seat '$t' inbox ($MAIL_DIR/$t) — unwritable or disk-full; aborted (FI-61). Recipients before '$t' may already be delivered (FI-60)."
+      }
+      {
+        printf -- '---\n'
+        printf 'id: %s\n' "$base"
+        printf 'from: %s\n' "$from"
+        printf 'to: %s\n' "$t"
+        printf 'date: %s\n' "$iso"
+        printf 'subject: %s\n' "$subject"
+        printf 'body-sha256: %s\n' "$sha"
+        printf 'body-bytes: %s\n' "$bytes"
+        (( ${#resolved[@]} > 1 )) && printf 'broadcast-to: %s\n' "$(IFS=,; echo "${resolved[*]}")"
+        printf -- '---\n\n'
+        cat "$body"
+      } > "$tmp"
+      # Atomic create-if-absent — the ONLY test-and-claim that is atomic between
+      # processes AND leaves no empty-visible window: `ln` either creates $cand with
+      # this content already in place, or fails EEXIST and creates nothing.
+      if ln "$tmp" "$cand" 2>/dev/null; then
+        rm -f "$tmp"; dest="$cand"; claimed=1; break
+      fi
+      # FI-61: the link failed though the path was free a moment ago. If $cand EXISTS
+      # now it was a race (another sender claimed it between our -e check and the
+      # link) -> retry. If it still does NOT exist, the inbox itself cannot be
+      # written (unwritable dir / disk-full / quota) and retrying would spin FOREVER,
+      # hanging the whole send — so fail LOUD instead of wedging the channel every
+      # seat depends on.
       # ⚠ CHOSEN TRADEOFF, not an oversight: if a third process REMOVES $cand between the
-      # failed create and this re-check, a genuine collision reads as "absent" and we die
+      # failed link and this re-check, a genuine collision reads as "absent" and we die
       # a spurious FALSE-LOUD. That is the correct direction to err — a spurious failure
       # is recoverable (re-send), a spin is not (it wedges the shared channel) — and the
       # bounded backstop below covers the inverse. DO NOT "fix" this to retry-on-absent:
       # that reintroduces FI-61's infinite spin on a real unwritable/full inbox.
+      rm -f "$tmp"
       if [[ ! -e "$cand" ]]; then
         rm -f "$body"
         die "cannot write to seat '$t' inbox ($MAIL_DIR/$t) — unwritable or disk-full; aborted (FI-61). Recipients before '$t' may already be delivered (FI-60)."
@@ -170,20 +257,7 @@ mail_send() {
     # sharing the same second+from+subject stem — which cannot occur in practice. That
     # unreachability IS the point: a bound on a formerly-unbounded loop must never spin
     # even in the impossible case. ⛔ NOT dead code — do not delete it as "unreachable".
-    [[ $claimed -eq 1 ]] || { rm -f "$body"; die "could not claim a destination for '$t' after 1000 attempts — aborted (FI-61 backstop)."; }
-    {
-      printf -- '---\n'
-      printf 'id: %s\n' "$(basename "$dest" .md)"
-      printf 'from: %s\n' "$from"
-      printf 'to: %s\n' "$t"
-      printf 'date: %s\n' "$iso"
-      printf 'subject: %s\n' "$subject"
-      printf 'body-sha256: %s\n' "$sha"
-      printf 'body-bytes: %s\n' "$bytes"
-      (( ${#resolved[@]} > 1 )) && printf 'broadcast-to: %s\n' "$(IFS=,; echo "${resolved[*]}")"
-      printf -- '---\n\n'
-      cat "$body"
-    } | atomic_write "$dest"
+    [[ $claimed -eq 1 ]] || { rm -f "$body" "$tmp"; die "could not claim a destination for '$t' after 1000 attempts — aborted (FI-61 backstop)."; }
 
     # ─── Integrity, not existence (FI-06) ────────────────────────────────────
     # The previous delivery check counted FILES and reported 5/5 for mail whose
@@ -275,6 +349,38 @@ LAST_DELIVERED_FILE() { echo "$STATE_DIR/last_delivered/$1"; }
 #   seat with 27 un-acked and no ability to ack still gets message 28 in full, cheaply,
 #   forever (③) — the backlog's SIZE no longer determines whether the poller can stay useful.
 SHOWN_FILE() { echo "$STATE_DIR/shown/$1"; }
+
+# ─── Recent (durable index of ids this seat has SEEN, surviving ack/archive) ──
+# ISSUES_2026-08-20.md item 4 (project owner): "showing recent mail should be
+# something useful that way you don't need to dig into the thousands of old
+# archive mail as soon as it's read once and you need to go back to it." SHOWN_FILE
+# above (and `unread`, its reader-facing view) answers "what's still un-acked" and
+# is PRUNED to exactly that set — a message drops out the moment it's acked, which
+# is precisely when a seat is most likely to need to look back at it. This is a
+# separate, durable, append-only log, one line per message ever shown IN FULL
+# (never a summary re-print, which would be the same id a second time) — small,
+# cheap, local, capped rather than unbounded, and not a search engine or a
+# reason to touch the archive tree.
+RECENT_MAX_LINES=500
+RECENT_FILE() { echo "$STATE_DIR/recent/$1"; }
+_recent_record() {
+  local seat="$1" f="$2" id from subj rf
+  id="$(basename "$f" .md)"
+  from="$(sed -n 's/^from: //p' "$f" | head -1)"
+  subj="$(sed -n 's/^subject: //p' "$f" | head -1)"
+  # One line per record, every reader (mail_recent's own tab-split) assumes
+  # stays single-line -- strip embedded tabs/newlines rather than let a
+  # pasted multi-line subject silently corrupt that assumption.
+  from="${from//$'\t'/ }"; from="${from//$'\n'/ }"
+  subj="${subj//$'\t'/ }"; subj="${subj//$'\n'/ }"
+  rf="$(RECENT_FILE "$seat")"
+  mkdir -p "$(dirname "$rf")"
+  { [[ -f "$rf" ]] && cat -- "$rf"
+    printf '%s\t%s\t%s\n' "$id" "${from:-?}" "${subj:-(no subject)}"
+  } | tail -n "$RECENT_MAX_LINES" > "$rf.tmp"
+  mv -f "$rf.tmp" "$rf"
+}
+
 mail_deliver() {
   local seat="$1" maxb="${2:-60000}"
   local total=0 shown=0 deferred=0 summarized=0
@@ -342,6 +448,7 @@ mail_deliver() {
     #    convert "unread mail" into "vanished mail", and the reader would have no
     #    way to detect it: the failure would be invisible and would read as calm.
     if cat -- "$f"; then
+      _recent_record "$seat" "$f"
       [[ "$(dirname "$f")" == "$MAIL_DIR/$seat" ]] && mv -f -- "$f" "$MAIL_DIR/$seat/unacked/"
       total=$((total+sz)); shown=$((shown+1)); shown_names+=("$b")
     else
@@ -376,9 +483,22 @@ mail_deliver() {
   (( summarized > 0 )) && info "📎 $summarized already-shown message(s) summarized above, not re-printed."
   (( deferred > 0 )) && info "⏸ $deferred deferred (size cap) — they arrive on the next poll."
   info ""
-  info "▶ TWO STEPS, both required:"
-  info "    1. aimail ack $seat --all      (after you have acted on them)"
-  info "    2. aimail poll $seat           (re-arm; background task)"
+  # ⛔ MODE-AWARE STEP 2 (PROP-fable-40-adjacent, item 1's own footer gap, 2026-09-10): a
+  # persistent poller (`aimail poll-persistent`, see lib/poller.sh) never exits on mail, so
+  # "re-arm" is FALSE under it -- printing it anyway is a real "one definition per kind"
+  # violation (fable's own review of 60fb78b): a reader gets two contradictory instructions in
+  # one delivery, one from this shared footer, one from `poller_run_persistent`'s own
+  # `_persistent_notice` line. `AIMAIL_POLL_PERSISTENT=1` is exported once by
+  # `poller_run_persistent` (never by `poller_run`, whose own callers never set it, so the
+  # default branch below is byte-identical to before this change for every existing caller).
+  if [[ "${AIMAIL_POLL_PERSISTENT:-}" == "1" ]]; then
+    info "▶ ONE STEP required (this poller is PERSISTENT -- do not re-arm, it is still watching):"
+    info "    1. aimail ack $seat --all      (after you have acted on them)"
+  else
+    info "▶ TWO STEPS, both required:"
+    info "    1. aimail ack $seat --all      (after you have acted on them)"
+    info "    2. aimail poll $seat           (re-arm; background task)"
+  fi
   info ""
   info "⚠ A message's FULL BODY prints exactly once. Still un-acked after that, it is a"
   info "  one-line summary on every later poll — visible, but never re-spent in full."
@@ -400,6 +520,22 @@ mail_deliver() {
 #   ONE message's full body, unconditionally, regardless of shown-state — the
 #   summary line below now names it explicitly, so recovery never requires
 #   knowing the mailbox's on-disk layout.
+#
+# ⭐ unreadmailtoolfix (architect/fable, 2026-09-01) — a report of mail "archived
+#   unread" turned out to have TWO distinct candidate causes that look identical
+#   from the reader's side: aimail's own delivery path silently dropping bytes
+#   (this file's problem), or a display/rendering layer above it (resume banner,
+#   task-notification replay) truncating what aimail already wrote in full (not
+#   this file's problem — outside this code's reach). Two repro experiments this
+#   date found aimail's own batch-cap and shown-set bookkeeping intact at up to
+#   96KB in one message; the reported 34KB cut was never reproduced here and the
+#   original session was gone by the time of the dig — inconclusive either way.
+#   ⇒ THE DISCRIMINATING CHECK, for whoever hits this next: the moment a large
+#   delivery looks cut, `wc -c` the task's OWN OUTPUT FILE on disk and compare
+#   against what the session actually displayed. File complete + display cut =
+#   rendering layer, harness territory. File itself cut = this file's delivery
+#   path, and worth reopening as a real aimail bug. One command settles which
+#   layer owns it — run it before assuming either side.
 mail_show() {
   local seat="$1" id="$2"
   local p="$id"; [[ "$p" == *.md ]] || p="$p.md"
@@ -414,6 +550,67 @@ mail_show() {
     "  aimail status $seat   shows what is currently outstanding"
 }
 
+# ─── Unread (list, don't just count, what's still un-acked) ──────────────────
+# ⛔⛔ `status` gives a bare COUNT of un-acked mail; recovering from a missed
+#   showing (AR-25) still meant listing unacked/ off disk by hand to find an id
+#   to pass to `show` — "spelunking" (fable, 2026-09-01 ruling on unread-mail).
+#   ⇒ This is that index: id, sender, subject, size, age, oldest first — the
+#   exact set `show <seat> <id>` can act on, with nothing to grep for by hand.
+mail_unread() {
+  local seat="$1"
+  local dir="$MAIL_DIR/$seat/unacked"
+  local -a files=()
+  while IFS= read -r f; do [[ -n "$f" ]] && files+=("$f"); done < <(
+    find "$dir" -maxdepth 1 -type f -name '*.md' -printf '%T@\t%p\n' 2>/dev/null | sort -n | cut -f2-
+  )
+  if (( ${#files[@]} == 0 )); then
+    info "no un-acked mail for '$seat'."
+    return 0
+  fi
+  info "${#files[@]} un-acked message(s) for '$seat' (oldest first):"
+  local f b sz from subj
+  for f in "${files[@]}"; do
+    b="$(basename "$f" .md)"
+    sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    from="$(sed -n 's/^from: //p' "$f" | head -1)"
+    subj="$(sed -n 's/^subject: //p' "$f" | head -1)"
+    printf '  %-58s  %6sB  from %-14s %s\n' "$b" "$sz" "${from:-?}" "${subj:-(no subject)}"
+  done
+  info ""
+  info "▶ aimail show $seat <id>   re-prints one in full, unconditionally."
+}
+
+# ─── Recent (what this seat has SEEN lately, acked or not) ───────────────────
+# ISSUES_2026-08-20.md item 4. Companion to `unread` above: `unread` is the
+# live un-acked queue and empties the instant a message is acked; `recent` is
+# the durable log `_recent_record` (see RECENT_FILE above) appends to on every
+# first-time full showing, so a message already acted on and archived hours
+# ago is still findable here — recovery is `aimail recent <seat>` -> pick an
+# id -> `aimail show <seat> <id>`, never "remember which background-task
+# output happened to print it."
+mail_recent() {
+  local seat="$1" n="${2:-20}"
+  case "$n" in
+    '' | *[!0-9]*) refused "N must be a positive integer, got '$n'" ;;
+  esac
+  (( n > 0 )) || refused "N must be a positive integer, got '$n'"
+  local rf; rf="$(RECENT_FILE "$seat")"
+  if [[ ! -s "$rf" ]]; then
+    info "no recent mail recorded yet for '$seat'."
+    return 0
+  fi
+  local -a lines=()
+  while IFS= read -r l; do [[ -n "$l" ]] && lines+=("$l"); done < <(tail -n "$n" -- "$rf")
+  info "last ${#lines[@]} message(s) '$seat' has seen (most recent first):"
+  local i id from subj
+  for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
+    IFS=$'\t' read -r id from subj <<<"${lines[$i]}"
+    printf '  %-58s  from %-14s %s\n' "$id" "${from:-?}" "${subj:-(no subject)}"
+  done
+  info ""
+  info "▶ aimail show $seat <id>   re-prints one in full, unconditionally."
+}
+
 # ─── Acknowledge ──────────────────────────────────────────────────────────────
 # ⛔⛔ AR-23 — `ack --all` used to sweep EVERY file in unacked/ unconditionally.
 #   unacked/ is re-printed on every `deliver`, but nothing tied THIS ack to a
@@ -425,13 +622,34 @@ mail_show() {
 #   (written by mail_deliver every call) whose file set matches unacked/
 #   EXACTLY. Acking by explicit id is unaffected — naming an id already is
 #   the claim you read that one — and --force still allows a deliberate sweep.
+#
+# ⛔⛔ AR-28 (project owner, 2026-09-03) — AR-23's receipt check only proves a
+#   delivery just happened, not that anything was read. A caller (human or
+#   agent) that mechanically chains `poll` → `ack --all` as a fixed idiom
+#   satisfies AR-23 every time without ever attending to the content — MEASURED
+#   live in this fleet the same morning this was written. ⇒ `--all` now also
+#   requires `--sha <prefix>[,<prefix>...]` naming an 8+ hex-char prefix of
+#   EVERY target's own `body-sha256`, one prefix per target (order-independent,
+#   duplicates collapse). The prefix is not printable proof of comprehension —
+#   nothing mechanical can be — but it cannot be produced without opening the
+#   actual delivered content (the header of each message, at minimum) and
+#   copying a value out of it, which a fixed muscle-memory idiom cannot do.
+#   `--force` still bypasses this too, as a deliberate, nameable "sweep it
+#   unread" — never the default path.
 mail_ack() {
   local seat="$1"; shift
   local unacked="$MAIL_DIR/$seat/unacked"
-  local force=0
+  local force=0 sha_arg=""
   local -a rest=()
-  local a; for a in "$@"; do
-    [[ "$a" == "--force" ]] && force=1 || rest+=("$a")
+  local a prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "--sha" ]]; then sha_arg="$a"; prev=""; continue; fi
+    case "$a" in
+      --force) force=1 ;;
+      --sha)   prev="--sha" ;;
+      --sha=*) sha_arg="${a#--sha=}" ;;
+      *)       rest+=("$a") ;;
+    esac
   done
   set -- "${rest[@]}"
 
@@ -452,6 +670,32 @@ mail_ack() {
           "  What's in unacked/ right now must have been shown by a 'deliver' in the" \
           "  last ${ttl}s, exactly. Run 'aimail deliver $seat' to see the current set," \
           "  then ack — or 'aimail ack $seat --all --force' to sweep it unread."
+      fi
+
+      # AR-27: every target's body-sha256 prefix must be named explicitly.
+      local -a want_shas=() missing=()
+      local f fsha
+      for f in "${targets[@]}"; do
+        fsha="$(sed -n 's/^body-sha256: //p' "$f" | head -1)"
+        want_shas+=("$fsha")
+      done
+      local -a given=()
+      IFS=',' read -r -a given <<< "${sha_arg// /}"
+      local i matched
+      for i in "${!want_shas[@]}"; do
+        matched=0
+        local g
+        for g in "${given[@]}"; do
+          [[ -n "$g" ]] && [[ "${want_shas[$i]}" == "$g"* ]] && { matched=1; break; }
+        done
+        (( matched == 0 )) && missing+=("$(basename "${targets[$i]}" .md)  sha=${want_shas[$i]:0:12}…")
+      done
+      if (( ${#missing[@]} > 0 )); then
+        refused "'$seat' ack --all is missing --sha for ${#missing[@]} message(s) — refusing to archive unread mail." \
+          "  Naming a message's own body-sha256 prefix is the claim you opened it. Missing:" \
+          "$(printf '    %s\n' "${missing[@]}")" \
+          "  Re-run with, e.g.: aimail ack $seat --all --sha <sha1>,<sha2>,…" \
+          "  or 'aimail ack $seat --all --force' to sweep it unread, deliberately."
       fi
     fi
   else

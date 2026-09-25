@@ -20,7 +20,8 @@ aimail seat add main "General work"
 aimail seat add backend "Backend work" "be"
 
 aimail send --to backend --from main --subject "gate is free" --body-file ./msg.md
-aimail poll backend        # arm in a BACKGROUND task; it exits when mail lands
+aimail poll-persistent backend   # arm as a Monitor task (30-min cap, re-arm at expiry); never exits on a wake
+aimail poll backend        # DEPRECATED 2026-09-21 (still works, warns): exits when mail lands
 aimail ack backend --all   # after acting on it
 ```
 
@@ -153,19 +154,30 @@ passed while the guard was switched off entirely.
 ## Budget, checkpoint, and unattended overnight running
 
 ```bash
-aimail budget status          # the block, the last callout AND ITS AGE, the schedule
-aimail budget callout 42      # record a /usage reading — the only true level
+aimail budget status          # the block, the last reading AND ITS AGE, the schedule
+aimail budget callout 42      # record a /usage reading — a human's word, authoritative
+aimail budget probe           # hit the unofficial API and record it automatically
 ```
 
 **The one idea this is built around: the block boundary is measurable, the
-percentage is not.** Everything that must work unattended is keyed on the
-boundary; only advisory output is keyed on the percentage.
+percentage is not — through anything OFFICIAL.** Everything that must work
+unattended is keyed on the boundary; only advisory output is keyed on the
+percentage.
 
-`/usage` shows the official session and weekly percentages and is **not
-programmatically accessible** — not via statusLine, hooks, files, an API, or an
-environment variable ([issue #20636](https://github.com/anthropics/claude-code/issues/20636),
-closed unimplemented). So a human reading `/usage` aloud is the only source of a
-true level. `budget callout` is first-class, not a fallback.
+`/usage` shows the official session and weekly percentages and there is **no
+documented way to read it** — not via statusLine, hooks, files, or a published
+API ([issue #20636](https://github.com/anthropics/claude-code/issues/20636),
+closed unimplemented). `budget callout` exists because of that, and a human's
+reading stays the one CLAIM nothing else can substitute for.
+
+`budget probe` is different in kind, not just in convenience: it hits an
+**unofficial, undocumented** endpoint (the same one Claude Code's own `/status`
+command calls internally) using the OAuth token Claude Code already stores
+locally. Confirmed live and working, but unpublished — it could change shape or
+disappear in any release with zero notice, and it is not the same claim as a
+human reading `/usage`, so its ledger rows are tagged `probe`, not `callout`,
+and `budget status` labels them accordingly. Wire it into cron for continuous
+freshness; keep `budget callout` as the fallback for whenever the probe breaks.
 
 The *boundary*, though, is knowable: a block starts at your first message and
 runs exactly 5 hours, and `ccusage` models that as an anchored block. So the

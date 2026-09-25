@@ -40,7 +40,16 @@ role_show() {
     "nothing was ever written. A seat with no role file resumes blind." \
     "  aimail role write $seat < handover.md"
   local sz age; sz="$(stat -c %s "$f")"; age="$(age_min "$(stat -c %Y "$f")")"
-  info "role: $seat    ${sz}B    written ${age} min ago"
+  # ⛔⛔ MUST GO TO STDERR, NEVER `info` (which prints to STDOUT): this function's
+  #   own body content is `cat`-ed to stdout right below, and `aimail role show
+  #   <seat> > file` is exactly how a handover gets captured for a later
+  #   `role write <seat> < file` round-trip. A banner mixed into that same
+  #   stream gets captured WITH the real content — measured 2026-09-02: fable's
+  #   own role file (and its .prev backup) had 65 PREPENDED banner lines from
+  #   this exact pattern repeated, with the real handover intact underneath.
+  #   A handover is the only thing that crosses an account switch; a status
+  #   line that can quietly bury it is a single point of failure for every seat.
+  printf 'role: %s    %sB    written %s min ago\n' "$seat" "$sz" "$age" >&2
   if (( sz > ROLE_WARN_BYTES )); then
     warn "this role file is ${sz}B — over the ${ROLE_WARN_BYTES}B guideline."
     warn "A handover that costs a fresh session most of its context defeats its own"
@@ -57,14 +66,41 @@ role_write() {
   # Keep the previous version. A handover overwritten by a worse one is a loss
   # that only shows up when someone tries to resume from it.
   [[ -f "$f" ]] && cp -p "$f" "$(ROLES_DIR)/.$seat.prev.md"
+  # ⛔⛔ DEFENSE IN DEPTH for the same incident the stderr fix above closes at the
+  #   source: refuse a file whose first line IS `role_show`'s own status banner,
+  #   verbatim — the shape of an already-captured `role show <seat> > file`
+  #   redirect, or a copy-paste that included it. This is a backstop (the real
+  #   fix is that `role_show` no longer prints the banner to stdout at all), not
+  #   the only guard — it only inspects a FILE argument, not piped stdin, since
+  #   bash cannot peek a pipe without consuming it, and the stderr fix already
+  #   makes a fresh capture via either path banner-free.
+  local _banner_re='^role: [^[:space:]]+[[:space:]]+[0-9]+B[[:space:]]+written [0-9]+ min ago$'
   if [[ -n "$src" ]]; then
     [[ -f "$src" ]] || refused "no such file: '$src'"
+    if [[ "$(head -n1 -- "$src")" =~ $_banner_re ]]; then
+      refused "'$src' starts with aimail's own role-status banner, not a handover." \
+        "This is the exact shape of an 'aimail role show <seat> > file' capture --" \
+        "the banner used to print to stdout and get captured along with the real" \
+        "content. Strip that first line (and any blank line after it) before writing." \
+        "The banner now prints to stderr, so a fresh 'role show ... > file' will not" \
+        "reproduce this."
+    fi
     atomic_write "$f" < "$src"
   else
     [[ -t 0 ]] && refused "no content given." \
       "  aimail role write $seat handover.md" \
       "  aimail role write $seat < handover.md"
     atomic_write "$f"
+  fi
+  # ⭐ ASK LEDGER: append the seat's own open asks between markers, replacing
+  # any existing block (never duplicated across writes) so a stalled row
+  # shows exactly where the work was left without growing on every write.
+  # ask_role_block is a no-op-safe empty string when the seat has no open
+  # rows or lib/ask.sh isn't sourced by the caller.
+  if [[ -f "$f" ]] && command -v ask_role_block >/dev/null 2>&1; then
+    sed -i "/^${ASK_ROLE_BEGIN}\$/,/^${ASK_ROLE_END}\$/d" "$f" 2>/dev/null || true
+    local _ask_block; _ask_block="$(ask_role_block "$seat" 2>/dev/null)"
+    [[ -n "$_ask_block" ]] && printf '\n%s\n' "$_ask_block" >> "$f"
   fi
   ok "wrote role for '$seat' ($(stat -c %s "$f")B) → $f"
   # ⛔⛔ `[[ test ]] && cmd` AS A FUNCTION'S LAST STATEMENT LEAKS THE FALSE TEST AS
@@ -188,6 +224,25 @@ role_resume() {
 #   disk. Reuse it rather than inventing a second, competing mapping — two
 #   session->seat records that can drift is worse than one.
 _whoami_sid() { echo "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; }
+
+# whoami_seat_quiet — the same session->seat lookup role_whoami does, with no
+# "ok"/error output: prints the seat name and returns 0, or prints nothing and
+# returns 1. For a caller that wants to KNOW the current seat (e.g. a sane
+# --from default for a mail send), not report on the lookup itself. Reuses
+# role_whoami's own two-tier lookup (stopguard file, then
+# AIMAIL_EXTERNAL_SEAT_DIR) rather than a second, competing mapping.
+whoami_seat_quiet() {
+  local sid; sid="$(_whoami_sid)"
+  [[ -n "$sid" ]] || return 1
+  local f="$STATE_DIR/stopguard/session.$sid"
+  if [[ -f "$f" ]]; then cat "$f"; return 0; fi
+  if [[ -n "${AIMAIL_EXTERNAL_SEAT_DIR:-}" ]]; then
+    local ext="$AIMAIL_EXTERNAL_SEAT_DIR/seat_$sid"
+    [[ -f "$ext" ]] && { cat "$ext"; return 0; }
+  fi
+  return 1
+}
+
 role_whoami() {
   local sid; sid="$(_whoami_sid)"
   [[ -n "$sid" ]] || unmeasurable "no session id in this environment" \
