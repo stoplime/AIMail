@@ -31,7 +31,7 @@ seat_model_pin() {
   [[ -n "$v" ]] && { echo "$v"; return 0; }
   if [[ "$seat" == "fable" ]]; then echo "${AIMAIL_MODEL_PIN_FABLE:-claude-fable-5-1}"
   elif [[ "$seat" == "${AIMAIL_SUPERVISOR:-assistant}" ]]; then echo "${AIMAIL_MODEL_PIN_SUPERVISOR:-claude-opus-5-5}"
-  else echo "${AIMAIL_MODEL_PIN_DEFAULT:-claude-sonnet-5}"; fi
+  else echo "${AIMAIL_MODEL_PIN_DEFAULT:-claude-sonnet-5-5}"; fi
 }
 
 # _slug_to_dir <projects-slug> — the scheduler names a project dir by its path with '/' -> '-'. A path

@@ -777,7 +777,7 @@ export AIMAIL_FLEET_ACCOUNTS="alpha beta"
 # 9.1 model pins: the fable seat, the supervisor, everyone else; an explicit pin wins
 chk "pin: fable -> the fable model" "$(seat_model_pin fable)" "claude-fable-5-1"
 chk "pin: the supervisor -> opus" "$(seat_model_pin super)" "claude-opus-5-5"
-chk "pin: an ordinary seat -> sonnet" "$(seat_model_pin seat-a)" "claude-sonnet-5"
+chk "pin: an ordinary seat -> sonnet" "$(seat_model_pin seat-a)" "claude-sonnet-5-5"
 chk "pin: AIMAIL_MODEL_PIN_<seat> overrides" "$(AIMAIL_MODEL_PIN_seat_a=model-z seat_model_pin seat-a)" "model-z"
 # 9.2 a project slug walks back to its directory even when a path segment contains '-'
 mkdir -p "$AIMAIL_ROOT/pj/x-y/z"

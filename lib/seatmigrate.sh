@@ -508,11 +508,11 @@ _canonicalize_model_id() {
   #   when Anthropic ships a new model tier or renames a full id.
   local in="$1"
   case "$in" in
-    sonnet)  echo "claude-sonnet-5" ;;
+    sonnet)  echo "claude-sonnet-5-5" ;;
     opus)    echo "claude-opus-5-5" ;;
     fable)   echo "claude-fable-5-1" ;;
     haiku)   echo "claude-haiku-4-5-20251001" ;;
-    claude-sonnet-5|claude-opus-5-5|claude-fable-5-1|claude-haiku-4-5-20251001) echo "$in" ;;
+    claude-sonnet-5-5|claude-sonnet-5|claude-opus-5-5|claude-fable-5-1|claude-haiku-4-5-20251001) echo "$in" ;;
     *) return 1 ;;
   esac
 }
@@ -623,7 +623,7 @@ seat_launch() {
   if ! _canon_model="$(_canonicalize_model_id "$model")"; then
     refused "seat launch: model '$model' is not a known alias or a known full id" \
       "Known aliases: sonnet, opus, fable, haiku." \
-      "Known full ids: claude-sonnet-5, claude-opus-5-5, claude-fable-5-1, claude-haiku-4-5-20251001." \
+      "Known full ids: claude-sonnet-5-5, claude-sonnet-5, claude-opus-5-5, claude-fable-5-1, claude-haiku-4-5-20251001." \
       "Never guessed: an unrecognized spelling must not silently launch, or let a seat carry two spellings of the same model."
   fi
   model="$_canon_model"

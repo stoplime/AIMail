@@ -142,7 +142,7 @@ chk "…exactly one launch" "$(grep -c 'argv=--bg' "$CALLS")" 1
 chk_contains "…the standard boot sequence in the prompt" "$(cat "$CALLS")" "aimail session"
 chk_contains "…and the poller step" "$(cat "$CALLS")" "arm your poller"
 chk "…record: account" "$(seat_record_read seat-a account)" "alpha"
-chk "…record: model" "$(seat_record_read seat-a model)" "claude-sonnet-5"
+chk "…record: model" "$(seat_record_read seat-a model)" "claude-sonnet-5-5"
 chk "…record: cwd" "$(seat_record_read seat-a cwd)" "$AIMAIL_ROOT"
 chk "…record: launch_path" "$(seat_record_read seat-a launch_path)" "launch"
 chk "…an ordinary seat gets no --remote-control" "$(grep -c -- '--remote-control' "$CALLS")" 0
