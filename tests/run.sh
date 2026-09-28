@@ -387,6 +387,21 @@ accepts "'greenfield' in a subject is not treated as GREEN" \
 accepts "'evergreen' in a subject is not treated as GREEN" \
   -- send --to main --from main --subject "evergreen dependency bump" --body-file "$AIMAIL_ROOT/green_bare.md"
 
+accepts "'blue-green' (a hyphen is not a word boundary here) is not treated as GREEN" \
+  -- send --to main --from main --subject "blue-green switch workflow" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+accepts "'green-light' (a hyphen is not a word boundary here either) is not treated as GREEN" \
+  -- send --to main --from main --subject "green-light the deploy" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+accepts "an all-caps hyphenated compound is still not a bare GREEN token" \
+  -- send --to main --from main --subject "BLUE-GREEN deploy design" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+accepts "lowercase 'green' as its own word is not a verdict (case-sensitive)" \
+  -- send --to main --from main --subject "gate green: t123" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+refuses "GREEN followed by punctuation still refuses" "Producer" \
+  -- send --to main --from main --subject "Verdict: GREEN." --body-file "$AIMAIL_ROOT/green_bare.md"
+
 printf 'Producer: services/foo.py:12\nShip it.\n' > "$AIMAIL_ROOT/green_onlyproducer.md"
 refuses "GREEN with only a producer line is refused, and names the missing one" "Consumer" \
   -- send --to main --from main --subject "GREEN" --body-file "$AIMAIL_ROOT/green_onlyproducer.md"

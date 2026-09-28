@@ -159,8 +159,15 @@ mail_send() {
   # producer, or an output with no consumer, is a design question, not a
   # detail to fix later — so a GREEN verdict is refused here until it says so.
   # Docs-only gates are exempt: they carry no producer or consumer to name.
+  # ⚠ CASE-SENSITIVE, uppercase GREEN only, and a hyphen does NOT count as a word
+  # boundary here (unlike the pronoun guard's own [^[:alnum:]] test above) — a real
+  # verdict is always shouted in full caps ("GATE GREEN", "-- GREEN"), but ordinary
+  # prose routinely both lower-cases and hyphen-compounds this exact word ("blue-green",
+  # "green-light", "evergreen", "greenfield"). The old case-insensitive, hyphen-as-boundary
+  # test matched "green" inside "blue-green" and refused two real, non-verdict subjects
+  # in one week (2026-09-28) before this fix.
   if [[ "${AIMAIL_SEND_GREEN_GUARD:-1}" != "0" ]] \
-     && grep -qiE '(^|[^[:alnum:]])green([^[:alnum:]]|$)' <<<"$subject"; then
+     && grep -qE '(^|[^A-Za-z-])GREEN([^A-Za-z-]|$)' <<<"$subject"; then
     local _has_docs_only=0 _has_producer=0 _has_consumer=0
     grep -qE '^Docs-only:[[:space:]]*[^[:space:]]' "$body" && _has_docs_only=1
     grep -qE '^Producer:[[:space:]]*[^[:space:]]'  "$body" && _has_producer=1
