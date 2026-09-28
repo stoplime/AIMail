@@ -150,6 +150,45 @@ mail_send() {
       "  • pass --broadcast-second-person-ok if the referent is genuinely clear."
   fi
 
+  # ─── §2.4c — a GREEN verdict must name its producer and consumer ───────────
+  # The ecosystem check ("the dead bear rule"): a feature was once built,
+  # unit-tested and approved GREEN while reading an input field that no stage
+  # ever wrote — it could never have fired. Nobody had named, at gate time,
+  # the file:line that produces each new input the change reads or the
+  # file:line that consumes each new output it writes. An input with no
+  # producer, or an output with no consumer, is a design question, not a
+  # detail to fix later — so a GREEN verdict is refused here until it says so.
+  # Docs-only gates are exempt: they carry no producer or consumer to name.
+  if [[ "${AIMAIL_SEND_GREEN_GUARD:-1}" != "0" ]] \
+     && grep -qiE '(^|[^[:alnum:]])green([^[:alnum:]]|$)' <<<"$subject"; then
+    local _has_docs_only=0 _has_producer=0 _has_consumer=0
+    grep -qE '^Docs-only:[[:space:]]*[^[:space:]]' "$body" && _has_docs_only=1
+    grep -qE '^Producer:[[:space:]]*[^[:space:]]'  "$body" && _has_producer=1
+    grep -qE '^Consumer:[[:space:]]*[^[:space:]]'  "$body" && _has_consumer=1
+    if (( _has_docs_only == 0 )) && (( _has_producer == 0 || _has_consumer == 0 )); then
+      rm -f "$body"
+      local _missing
+      if (( _has_producer == 0 && _has_consumer == 0 )); then
+        _missing="a Producer: line and a Consumer: line"
+      elif (( _has_producer == 0 )); then
+        _missing="a Producer: line"
+      else
+        _missing="a Consumer: line"
+      fi
+      refused "a GREEN subject needs $_missing (or a Docs-only: line) in the body." \
+        "A GREEN verdict is refused unless the body names both the producer and" \
+        "the consumer it verified — the file:line that really writes each new" \
+        "input this change reads, and the file:line that really reads each new" \
+        "output it writes — or states Docs-only: for a gate with neither." \
+        "" \
+        "  Producer: path/to/file.py:42" \
+        "  Consumer: path/to/other_file.py:17" \
+        "  (verdict text follows)" \
+        "" \
+        "Kill switch, a human's decision only: AIMAIL_SEND_GREEN_GUARD=0."
+    fi
+  fi
+
   # ─── One file per recipient (§2.4) ─────────────────────────────────────────
   # ⛔ A `cc:` line delivers NOTHING — it is text inside one recipient's file.
   #    122 messages were once sent with a cc: header and the intended readers

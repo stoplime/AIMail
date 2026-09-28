@@ -365,6 +365,39 @@ accepts "the same claim in third person broadcasts" \
 accepts "second person to ONE seat is fine" \
   -- send --to main --from main --subject x --body-file "$AIMAIL_ROOT/pron.md"
 
+section "send — C4: a GREEN verdict must name its producer and consumer"
+printf 'Ship it.\n' > "$AIMAIL_ROOT/green_bare.md"
+refuses "GREEN with neither line is refused" "Producer" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nShip it.\n' > "$AIMAIL_ROOT/green_full.md"
+accepts "GREEN with both a producer and a consumer line passes" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_full.md"
+
+printf 'Docs-only: no code changed.\nShip it.\n' > "$AIMAIL_ROOT/green_docs.md"
+accepts "GREEN with a Docs-only: line passes" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_docs.md"
+
+accepts "a non-GREEN subject is untouched by the guard" \
+  -- send --to main --from main --subject "status update" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+accepts "'greenfield' in a subject is not treated as GREEN" \
+  -- send --to main --from main --subject "greenfield project kickoff" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+accepts "'evergreen' in a subject is not treated as GREEN" \
+  -- send --to main --from main --subject "evergreen dependency bump" --body-file "$AIMAIL_ROOT/green_bare.md"
+
+printf 'Producer: services/foo.py:12\nShip it.\n' > "$AIMAIL_ROOT/green_onlyproducer.md"
+refuses "GREEN with only a producer line is refused, and names the missing one" "Consumer" \
+  -- send --to main --from main --subject "GREEN" --body-file "$AIMAIL_ROOT/green_onlyproducer.md"
+
+printf 'Consumer: services/bar.py:34\nShip it.\n' > "$AIMAIL_ROOT/green_onlyconsumer.md"
+refuses "GREEN with only a consumer line is refused, and names the missing one" "Producer" \
+  -- send --to main --from main --subject "GREEN" --body-file "$AIMAIL_ROOT/green_onlyconsumer.md"
+
+AIMAIL_SEND_GREEN_GUARD=0 accepts "C4: the kill switch lets a bare GREEN through (a human's decision)" \
+  -- send --to main --from main --subject "GREEN" --body-file "$AIMAIL_ROOT/green_bare.md"
+
 section "delivery state machine — archive is unreachable by delivery"
 accepts "deliver moves inbox → unacked"        -- deliver main
 UNACKED=$(find "$AIMAIL_ROOT/mail/main/unacked" -name '*.md' | wc -l)
