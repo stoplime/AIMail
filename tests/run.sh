@@ -856,6 +856,7 @@ rm -f "$AIMAIL_ROOT/state/poller/main.hb"
 #   stale by design) must never read the same as one that is hung. Before the
 #   fix, both had only a staling `beat` to judge by, so a healthy park crossed
 #   into WEDGED after `limit` seconds and the dashboard told a human to kill it.
+NOW=$(date +%s)   # recaptured: the "fresh" park heartbeat is NOW-2, so a NOW taken before the fleet calls above is already stale when fleet reads it on a loaded machine
 _hb main pid=$$ started=$((NOW-600)) beat=$((NOW-90)) park_beat=$((NOW-2))
 _fleet_says main "PARKED" "a parked poller (stale beat, fresh park heartbeat) reads PARKED, not WEDGED"
 # ③ the other direction — a park heartbeat that has ALSO gone stale must still
