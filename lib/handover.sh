@@ -117,7 +117,7 @@ EOP
 #   other seat's old session is stopped by seat migrate as usual. A short BLOCK park is not a move
 #   trigger (R6(a)); only the WEEKLY reading decides here.
 seat_budget_move() {
-  local seat="${AIMAIL_SUPERVISOR:-assistant}" act=0 force=0 target="" psid="" from="${AIMAIL_VICE_SUPERVISOR:-main}"
+  local seat="${AIMAIL_SUPERVISOR:-assistant}" act=0 force=0 target="" psid="" from=""
   local wait_s="${AIMAIL_HANDOVER_WAIT_S:-300}" thr="${AIMAIL_SUPERVISOR_HANDOVER_PCT:-95}"
   while (( $# )); do
     case "$1" in
@@ -128,6 +128,12 @@ seat_budget_move() {
       *) refused "budget-move: unknown argument '$1'" ;;
     esac
   done
+  # The handover request is sent by the seat that runs the move when its session maps to a seat, else by
+  # the vice supervisor (an unattended run). --from overrides both.
+  if [[ -z "$from" ]]; then
+    if declare -F whoami_seat_quiet >/dev/null 2>&1 && from="$(whoami_seat_quiet)" && [[ -n "$from" ]]; then :
+    else from="${AIMAIL_VICE_SUPERVISOR:-main}"; fi
+  fi
   seat_exists "$seat" || refused "budget-move ($seat): '$seat' is not a registered seat"
   local cur old; cur="$(seat_record_read "$seat" account 2>/dev/null || echo '')"; old="$(seat_record_read "$seat" session_id 2>/dev/null || echo '')"
   [[ -n "$cur" && -n "$old" ]] || refused "budget-move ($seat): no seat record for '$seat' (account/session unknown) -- nothing to hand over from"

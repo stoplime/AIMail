@@ -395,6 +395,9 @@ chk "…the original is still listed on A" "$(grep -c "$SID" "$ACCT_A/agents.jso
 
 # ═══ 6. handover wait ════════════════════════════════════════════════════════
 printf '\n═══ 6. handover ═══\n'
+# Sections 6, 6b and 6c exercise the ask itself: a role file written a moment ago (by an earlier arm here)
+# would count as a current handover and skip it, so the freshness window is off until section 6d.
+export AIMAIL_MIGRATE_HANDOVER_FRESH_S=0
 reset_state; write_instance seat-a "$SID" acct-a; write_agents "$ACCT_A" "$SID"
 export AIMAIL_MIGRATE_HANDOVER_WAIT=1 AIMAIL_MIGRATE_POLL_S=1
 out="$("$AIMAIL" seat migrate seat-a beta --from super --model m 2>&1)"; rc=$?
@@ -463,6 +466,26 @@ chk "…still refuses overall (no handover ever arrived)" "$rc" 3
 chk_contains "…surfaces mail_send's REAL refusal text, not swallowed" "$out" "is NOT the registered"
 chk "…mail_send genuinely never delivered (the refusal was real)" "$(ls "$MAIL_DIR/seat-a"/*.md 2>/dev/null | grep -c 'migration\|MIGRATION')" 0
 rm -f "$(SEAT_RECORD_FILE super)"
+
+printf '\n═══ 6d. a role handover written moments ago counts: a seat that runs the move on ITSELF cannot write during the wait ═══\n'
+unset AIMAIL_MIGRATE_HANDOVER_FRESH_S
+reset_state; write_instance seat-a "$SID" acct-a; write_agents "$ACCT_A" "$SID"
+rm -rf "$MAIL_DIR/seat-a"; mkdir -p "$MAIL_DIR/seat-a" "$AIMAIL_ROOT/roles"
+export AIMAIL_MIGRATE_HANDOVER_WAIT=1 AIMAIL_MIGRATE_POLL_S=1
+printf 'current\n' > "$AIMAIL_ROOT/roles/seat-a.md"
+out="$("$AIMAIL" seat migrate seat-a beta --from super --model m 2>&1)"; rc=$?
+chk "role file written just now → proceeds without waiting (exit 0)" "$rc" 0
+chk_contains "…says the handover is already current" "$out" "already current"
+chk "…and asked for nothing (no mail to the seat)" "$(ls "$MAIL_DIR/seat-a"/*.md 2>/dev/null | wc -l)" 0
+reset_state; write_instance seat-a "$SID" acct-a; write_agents "$ACCT_A" "$SID"
+rm -rf "$MAIL_DIR/seat-a"; mkdir -p "$MAIL_DIR/seat-a"
+touch -d '30 minutes ago' "$AIMAIL_ROOT/roles/seat-a.md"
+out="$("$AIMAIL" seat migrate seat-a beta --from super --model m 2>&1)"; rc=$?
+chk "role file 30 minutes old → still asks, and refuses when nothing arrives" "$rc" 3
+chk "…the ask went out" "$(ls "$MAIL_DIR/seat-a"/*.md 2>/dev/null | grep -c 'migration\|MIGRATION')" 1
+touch "$AIMAIL_ROOT/roles/seat-a.md"; rm -rf "$MAIL_DIR/seat-a"; mkdir -p "$MAIL_DIR/seat-a"
+out="$(AIMAIL_MIGRATE_HANDOVER_FRESH_S=0 "$AIMAIL" seat migrate seat-a beta --from super --model m 2>&1)"; rc=$?
+chk "window 0 disables the shortcut: a fresh file is asked about anyway" "$rc" 3
 
 printf '\n═══ 7. session registry + resume-by-default + --fresh (the owner 2026-09-22) ═══\n'
 PRIOR="bbbbbbbb-1111-2222-3333-444444444444"
@@ -854,6 +877,16 @@ chk_contains "…pin sonnet" "$out" "--model claude-sonnet-5"
 chk "…no --keep-old" "$(grep -c -- '--keep-old' <<<"$out")" 0
 chk "…no remote control" "$(grep -c -- '--remote-control' <<<"$out")" 0
 chk_contains "…old session stopped by seat migrate" "$out" "stopped by seat migrate"
+# 9.7b who sends the handover request: the seat running the move, else the vice supervisor; --from overrides
+out="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID "$AIMAIL" fleet budget-move vice 2>&1)"
+chk_contains "no session mapping (an unattended run) → the vice supervisor sends" "$out" "--from vice "
+BM_SID="cccccccc-1111-2222-3333-444444444444"
+mkdir -p "$STATE_DIR/stopguard"; printf 'super' > "$STATE_DIR/stopguard/session.$BM_SID"
+out="$(CLAUDE_CODE_SESSION_ID="$BM_SID" "$AIMAIL" fleet budget-move vice 2>&1)"
+chk_contains "a registered session runs it → that seat sends, not the vice" "$out" "--from super "
+out="$(CLAUDE_CODE_SESSION_ID="$BM_SID" "$AIMAIL" fleet budget-move vice --from other 2>&1)"
+chk_contains "…--from overrides the mapping" "$out" "--from other "
+rm -f "$STATE_DIR/stopguard/session.$BM_SID"
 # 9.8 the announce: the capped account's seats, supervisor first, ONE mail per episode; clears when the reading drops. Kill switch AIMAIL_HANDOVER_ACT=0 honoured: nothing executed
 export AIMAIL_HANDOVER_ACT=0
 sup_reset; rm -f "$AIMAIL_ROOT/state/handover_announced_"* "$(SEAT_SESSIONS_FILE super)"

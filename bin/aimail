@@ -254,7 +254,7 @@ STATUS
   aimail commit-msg-guard [repo ...]        is the commit-msg sterility guard installed + resolvable? (--selftest)
   aimail budget placement [seat]            T-917 placement rules: the per-account report, or the eligible accounts for <seat>, best first
   aimail fleet supervisor-check | supervisor-ack   one supervisor liveness/wake tick (cron runs it inside fleet watchdog) | clear the alert
-  aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--force]   weekly-cap move of ONE seat: resume its prior session on the account with headroom, model pinned (the supervisor keeps its old session alive)
+  aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--from <seat>] [--force]   weekly-cap move of ONE seat: resume its prior session on the account with headroom, model pinned (the supervisor keeps its old session alive)
   aimail fleet supervisor-handover [--act] [--target <acct>] [--sid <id>] [--force]   budget handover of the supervisor seat: resume its prior session on the account with headroom, old kept alive off aimail
   aimail migrate <old-mailbox> [--dry-run]  import an existing mailbox
   aimail version
@@ -348,8 +348,8 @@ case "$cmd" in
              source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"; ensure_dirs
              supervisor_handover "$@"
            elif [[ "${1:-}" == "budget-move" ]]; then
-             shift; [[ $# -ge 1 ]] || refused "usage: aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--force]"
-             source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh"
+             shift; [[ $# -ge 1 ]] || refused "usage: aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--from <seat>] [--force]"
+             source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh"; source "$_SELF/../lib/role.sh" 2>/dev/null || true
              source "$_SELF/../lib/seatmigrate.sh"; source "$_SELF/../lib/handover.sh"; ensure_dirs
              _bm_seat="$1"; shift; seat_budget_move --seat "$_bm_seat" "$@"
            elif [[ "${1:-}" == "supervisor-check" ]]; then

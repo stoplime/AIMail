@@ -756,6 +756,16 @@ _mig_default_from() {
   fi
 }
 
+# _mig_handover_is_fresh <role-file> — 0 when the file was written within AIMAIL_MIGRATE_HANDOVER_FRESH_S
+#   (default 600 s). A seat that runs the move on ITSELF is blocked inside this command while it waits,
+#   so it can never write the handover the wait asks for; it writes first, and that write counts.
+_mig_handover_is_fresh() {
+  local f="$1" window="${AIMAIL_MIGRATE_HANDOVER_FRESH_S:-600}" m now
+  [[ "$window" =~ ^[0-9]+$ ]] && (( window > 0 )) && [[ -f "$f" ]] || return 1
+  m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"; now="$(date +%s)"
+  (( now - m <= window ))
+}
+
 _mig_default_prompt() {
   local seat="$1" from="$2" target="$3" prev="$4"
   cat <<EOF
@@ -981,6 +991,8 @@ seat_migrate() {
     info "   session is not live — no handover to ask for (the existing role file stands)"
   elif (( handover_wait == 0 )); then
     info "   --handover-wait 0 — not asking (caller's choice)"
+  elif _mig_handover_is_fresh "$role_file"; then
+    info "   role handover already current ($role_file written within ${AIMAIL_MIGRATE_HANDOVER_FRESH_S:-600}s) — not asking"
   else
     local before; before="$(stat -c %Y "$role_file" 2>/dev/null || echo 0)"
     local body; body="$(mktemp "${AIMAIL_ROOT}/tmp/migrate_handover.XXXXXX" 2>/dev/null || mktemp)"
