@@ -754,6 +754,28 @@ fi
 # T-762: fast skips REAL_TIER_MODULES entirely -- they need a DB, which fast's own definition
 # (mocked, no sharedcorpus) does not supply.
 
+# FLEET TESTS (2026-09-29): the guard-style tests that police our own tooling live in the
+# zignore repo (zignore/fleet_tests), not in Platform, so coworkers' CI never runs them -- but the
+# fleet still needs them or they protect nothing. Run here, in BOTH gates, against this worktree:
+# run_fleet_tests.py builds a throwaway tree around $WORKTREE (nothing is written into it) and
+# `--fast` leaves out the ~450 s probe-compile module (a probe edit, not a Platform edit, is what
+# that one checks; run it without --fast after touching a probe). Measured 122 s to 202 s (under load), and it is
+# added to EVERY gate, fast and full. Skipped, said so, when the hub has no fleet_tests directory.
+FLEET_TESTS_EXIT=0
+FLEET_TESTS_DESC="not run (no $PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py)"
+FLEET_RUNNER="$PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py"
+if [ -f "$FLEET_RUNNER" ]; then
+    FLEET_LOG="/tmp/canonical_battery_fleet_${SEAT}_${TS}.log"
+    ( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
+        "$CONDA_PY" "$FLEET_RUNNER" --checkout "$WORKTREE" --fast ) > "$FLEET_LOG" 2>&1
+    FLEET_TESTS_EXIT=$?
+    fleet_ran_line="$(grep -E '^Ran [0-9]+ tests? in' "$FLEET_LOG" | tail -1)"
+    FLEET_TESTS_DESC="${fleet_ran_line:-no Ran line} (log: $FLEET_LOG)"
+    # No Ran line, or "Ran 0 tests", means the runner never reached the tests: a refusal, not a pass.
+    fleet_ran_count="$(echo "$fleet_ran_line" | grep -oE '^Ran [0-9]+' | grep -oE '[0-9]+')"
+    [ "${fleet_ran_count:-0}" -eq 0 ] && FLEET_TESTS_EXIT=1
+fi
+
 RAN_LINE="$(grep -E '^Ran [0-9]+ tests? in' "$LOG" | tail -1)"
 RESULT_LINE="$(grep -E '^(OK|FAILED) ?(\(.*\))?$' "$LOG" | tail -1)"
 RAN_COUNT="$(echo "$RAN_LINE" | grep -oE '^Ran [0-9]+' | grep -oE '[0-9]+')"
@@ -932,6 +954,7 @@ if [ "${#REAL_TIER_SUMMARY[@]}" -gt 0 ]; then
 fi
 summ "REAL_TIER_EXIT=$REAL_TIER_EXIT (0 unless a real-tier module failed for a reason other than a named, pre-existing quirk -- see the per-module lines above)"
 summ "SKIP_NAMES_EXIT=$SKIP_NAMES_EXIT (0 unless the runner's own summary reports skipped>0 but zero '^SKIP: ' lines were found -- an instrument that cannot see its input, never a refusal on the skip names' own content)"
+summ "FLEET_TESTS_EXIT=$FLEET_TESTS_EXIT ($FLEET_TESTS_DESC)"
 echo "▶ summary:         $SUMMARY"
 
 if [ "$BATTERY_EXIT" -ne 0 ]; then
@@ -948,5 +971,8 @@ if [ "$REAL_TIER_EXIT" -ne 0 ]; then
 fi
 if [ "$SKIP_NAMES_EXIT" -ne 0 ]; then
     exit "$SKIP_NAMES_EXIT"
+fi
+if [ "$FLEET_TESTS_EXIT" -ne 0 ]; then
+    exit "$FLEET_TESTS_EXIT"
 fi
 exit "$CORPUS_EXIT"
