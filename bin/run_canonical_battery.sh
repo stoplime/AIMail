@@ -666,6 +666,11 @@ LOG="/tmp/canonical_battery_${SEAT}_${TS}.log"
 on_exit_or_signal() {
     local sig="${1:-EXIT}"
     bq_unreserve "$SEAT" "$$"
+    # A fleet-tests run started alongside the Platform tests must not outlive a killed gate.
+    if [ -n "${FLEET_PID:-}" ] && kill -0 "$FLEET_PID" 2>/dev/null; then
+        pkill -TERM -P "$FLEET_PID" 2>/dev/null
+        kill -TERM "$FLEET_PID" 2>/dev/null
+    fi
     if [ "$KILL_SUMMARY_WRITTEN" -eq 0 ] && [ "$sig" != "EXIT" ] \
        && [ "$TESTS_STARTED" -eq 1 ] && [ "$TESTS_COMPLETED" -eq 0 ]; then
         KILL_SUMMARY_WRITTEN=1
@@ -718,6 +723,18 @@ echo "▶ exported names:  ${REQUIRED_ENV_NAMES[*]} SENTRY_DSN TAKEOFF_POC_ROOT"
 echo "▶ conda python:    $CONDA_PY"
 echo "▶ running canonical battery ($GATE) ... (log: $LOG)"
 
+# FLEET TESTS, started here so they run alongside the Platform tests (they need about 40 s of a
+# machine that is otherwise busy for 10+ minutes, so running them after adds that time to every gate).
+# The result is collected below, where the step used to run; nothing about its verdict changes.
+FLEET_RUNNER="$PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py"
+FLEET_PID=""
+FLEET_LOG="/tmp/canonical_battery_fleet_${SEAT}_${TS}.log"
+if [ -f "$FLEET_RUNNER" ]; then
+    ( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
+        "$CONDA_PY" "$FLEET_RUNNER" --checkout "$WORKTREE" --fast --jobs 4 ) > "$FLEET_LOG" 2>&1 &
+    FLEET_PID=$!
+fi
+
 TESTS_STARTED=1
 ( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
     "$CONDA_PY" run_unit_tests.py "${TIER_FLAG[@]}" ) > "$LOG" 2>&1
@@ -763,11 +780,8 @@ fi
 # added to EVERY gate, fast and full. Skipped, said so, when the hub has no fleet_tests directory.
 FLEET_TESTS_EXIT=0
 FLEET_TESTS_DESC="not run (no $PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py)"
-FLEET_RUNNER="$PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py"
-if [ -f "$FLEET_RUNNER" ]; then
-    FLEET_LOG="/tmp/canonical_battery_fleet_${SEAT}_${TS}.log"
-    ( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
-        "$CONDA_PY" "$FLEET_RUNNER" --checkout "$WORKTREE" --fast ) > "$FLEET_LOG" 2>&1
+if [ -n "$FLEET_PID" ]; then
+    wait "$FLEET_PID"
     FLEET_TESTS_EXIT=$?
     fleet_ran_line="$(grep -E '^Ran [0-9]+ tests? in' "$FLEET_LOG" | tail -1)"
     FLEET_TESTS_DESC="${fleet_ran_line:-no Ran line} (log: $FLEET_LOG)"

@@ -17,15 +17,21 @@ chk() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  \xe2\x9c\x85 %s\n' 
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-# The step's block: from its FLEET_TESTS_EXIT=0 line to the closing `fi` at column 0.
-BLOCK="$TMP/block.sh"
-awk '/^FLEET_TESTS_EXIT=0$/ {on=1} on {print} on && /^fi$/ {exit}' "$W" > "$BLOCK"
-chk "the step's block was found in the wrapper" "$(grep -c FLEET_RUNNER= "$BLOCK")" "1"
+# The step has two parts: START (launches the runner in the background, before the Platform tests)
+# and COLLECT (waits for it and reads its verdict, after them). START runs from its FLEET_RUNNER=
+# line to the closing `fi`; COLLECT from its FLEET_TESTS_EXIT=0 line to the closing `fi`.
+START="$TMP/start.sh"; COLLECT="$TMP/collect.sh"
+awk '/^FLEET_RUNNER=/ {on=1} on {print} on && /^fi$/ {exit}' "$W" > "$START"
+awk '/^FLEET_TESTS_EXIT=0$/ {on=1} on {print} on && /^fi$/ {exit}' "$W" > "$COLLECT"
+chk "the start part was found in the wrapper" "$(grep -c FLEET_RUNNER= "$START")" "1"
+chk "the collect part was found in the wrapper" "$(grep -c 'wait "\$FLEET_PID"' "$COLLECT")" "1"
+chk "the runner is called with --jobs 4" "$(grep -c -- '--fast --jobs 4' "$START")" "1"
 
 run_step() {  # $1 = hub directory holding zignore/fleet_tests
   ( PLATFORM_ROOT="$1" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere
     ENV_ASSIGNMENTS=(X=1)
-    source "$BLOCK"
+    source "$START"
+    source "$COLLECT"
     echo "EXIT=$FLEET_TESTS_EXIT DESC=$FLEET_TESTS_DESC" )
 }
 mkhub() {  # $1 = name, $2 = the runner's body
@@ -54,6 +60,22 @@ echo "── ARM 4: a hub with no runner -- must skip, say why, and give 0 ─�
 mkdir -p "$TMP/none"
 out=$(run_step "$TMP/none"); chk "no runner -> EXIT=0" "$(echo "$out" | grep -o 'EXIT=[0-9]*' | head -1)" "EXIT=0"
 chk "the skip says it did not run" "$(echo "$out" | grep -c 'not run')" "1"
+
+echo "── ARM 4b: the runner runs ALONGSIDE the caller's work, not after it ──"
+mkhub slow 'sleep 3; echo "Ran 5 tests in 3s"; exit 0'
+elapsed=$( PLATFORM_ROOT="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
+           s0=$(date +%s.%N); source "$START"; s1=$(date +%s.%N)
+           echo "$s1 - $s0" | bc )
+chk "starting the runner returns at once (well under its 3 s)" "$(echo "$elapsed < 1" | bc)" "1"
+t0=$(date +%s)
+out=$( PLATFORM_ROOT="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
+       source "$START"; sleep 2; source "$COLLECT"; echo "EXIT=$FLEET_TESTS_EXIT" )
+t1=$(date +%s)
+chk "start, 2 s of other work, collect: the runner's 3 s overlapped the work (total under 4 s)" "$([ $((t1 - t0)) -lt 4 ] && echo yes || echo no)" "yes"
+chk "collect still reads the passing verdict after waiting" "$(echo "$out" | grep -o 'EXIT=[0-9]*' | head -1)" "EXIT=0"
+chk "the runner starts before the Platform tests in the wrapper" \
+    "$([ "$(grep -n '^ *FLEET_PID=\$!' "$W" | head -1 | cut -d: -f1)" -lt "$(grep -n '^TESTS_STARTED=1' "$W" | head -1 | cut -d: -f1)" ] && echo yes || echo no)" "yes"
+chk "a killed gate stops a still-running fleet run" "$(grep -c 'pkill -TERM -P "\$FLEET_PID"' "$W")" "1"
 
 echo "── ARM 5: the wrapper reports and enforces the value ──"
 chk "summary line present" "$(grep -c 'summ "FLEET_TESTS_EXIT=' "$W")" "1"
