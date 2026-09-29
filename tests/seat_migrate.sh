@@ -900,6 +900,68 @@ chk "…the prior session WAS resumed (the act ran)" "$(grep -c -- "--bg --resum
 chk "…the OLD supervisor session was NOT stopped" "$(grep -c "argv=stop ${SUPSID:0:8}" "$CALLS")" 0
 chk "…the record follows the prior session" "$(seat_record_read super session_id)" "$P_NEW"
 chk "…the DONE mail reached the vice" "$(grep -l 'WEEKLY-CAP MOVE DONE' "$AIMAIL_ROOT/mail/vice"/*.md 2>/dev/null | wc -l)" 1
+# ═══ 10. a session idle between turns (`done`) that still holds a running Monitor is LIVE ═══
+# WHY (2026-09-28 21:55): `seat migrate framing work` found the seat's session idle between two turns, state `done`,
+# and both the locate and the "gone?" check read `done` as dead. So nothing was stopped, the original went on working
+# (every mail woke it through its Monitor) and the resumed copy ran beside it for two hours. `done` is only dead when
+# the job has nothing in flight; the job's own state.json says which (inFlight.tasks / queued).
+printf '\n═══ 10. done + Monitor in flight = live ═══\n'
+write_idle() { # <dir> <sid> <in-flight tasks> [nojob] — state done, no pid; the job file's inFlight says whether a Monitor holds it open
+  python3 - "$@" <<'PY'
+import json, os, sys
+d, sid, n = sys.argv[1], sys.argv[2], int(sys.argv[3]); nojob = len(sys.argv) > 4
+p = os.path.join(d, "agents.json"); rows = json.load(open(p)) if os.path.exists(p) else []
+rows = [r for r in rows if r.get("sessionId") != sid]
+rows.append({"sessionId": sid, "id": sid[:8], "pid": None, "state": "done", "status": None,
+             "cwd": os.environ.get("TEST_CWD", "/tmp"), "name": "fake", "kind": "background"})
+json.dump(rows, open(p, "w"))
+if not nojob:
+    os.makedirs(os.path.join(d, "jobs", sid[:8]), exist_ok=True)
+    json.dump({"state": "done", "detail": "idle", "tempo": "idle", "sessionId": sid, "template": "bg",
+               "inFlight": ({"tasks": n, "queued": 0, "kinds": ["monitor"], "drainableMonitors": 0} if n else None)},
+              open(os.path.join(d, "jobs", sid[:8], "state.json"), "w"))
+PY
+}
+reset_state; write_instance seat-a "$SID" acct-a; write_idle "$ACCT_A" "$SID" 1
+out="$(seat_session_locate seat-a)"; rc=$?
+chk "10.1 idle (done) + Monitor in flight → located LIVE (exit 0)" "$rc" 0
+chk "…liveness live" "$(awk -F'\t' '$1=="liveness"{print $2}' <<<"$out")" "live"
+chk "…source is the listing, not the record" "$(awk -F'\t' '$1=="source"{print $2}' <<<"$out")" "agents"
+_sid_listed "$ACCT_A" "$SID"; chk "10.2 _sid_listed: done + Monitor in flight → still listed (0)" "$?" 0
+# controls: the same `done` row with NOTHING in flight, or with no job file, is dead as before
+write_idle "$ACCT_A" "$SID" 0; seat_record_write seat-a acct-a "$ACCT_A" "$SID" model-x boot "" "" "$TEST_CWD"
+out="$(seat_session_locate seat-a)"; rc=$?
+chk "10.3 control: done, nothing in flight → dead-with-record (exit 0)" "$rc" 0
+chk "…liveness dead" "$(awk -F'\t' '$1=="liveness"{print $2}' <<<"$out")" "dead"
+_sid_listed "$ACCT_A" "$SID"; chk "…_sid_listed: gone (1)" "$?" 1
+write_idle "$ACCT_A" "$SID" 1 nojob
+_sid_listed "$ACCT_A" "$SID"; chk "10.4 control: done and NO job file → gone (1), never guessed live" "$?" 1
+# migrate end to end: the idle-but-armed seat gets its stop
+reset_state; write_instance seat-a "$SID" acct-a; write_idle "$ACCT_A" "$SID" 1
+mkdir -p "$ACCT_A/jobs/$SHORT"; python3 - "$ACCT_A/jobs/$SHORT/state.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["respawnFlags"] = ["--model", "model-spec"]; json.dump(d, open(sys.argv[1], "w"))
+PY
+out="$("$AIMAIL" seat migrate seat-a beta --from super --handover-wait 0 2>&1)"; rc=$?
+chk "10.5 migrate of an idle seat with a Monitor in flight → SUCCESS (exit 0)" "$rc" 0
+chk "…claude stop WAS issued under A's config dir (the original is stopped)" "$(grep -c "cfg=$ACCT_A argv=stop $SHORT" "$CALLS")" 1
+chk "…the run did not call the seat 'not live'" "$(grep -c 'not live' <<<"$out")" 0
+chk "…stop happened BEFORE the relaunch" "$([[ "$(grep -n 'argv=stop' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n 'argv=--bg' "$CALLS" | head -1 | cut -d: -f1)" ]] && echo yes)" "yes"
+# a stop that does not take must be SEEN: the idle original still holds its Monitor, so it is still listed
+reset_state; write_instance seat-a "$SID" acct-a; write_idle "$ACCT_A" "$SID" 1; touch "$ACCT_A/.stop_fails"
+out="$("$AIMAIL" seat migrate seat-a beta --from super --model m --handover-wait 0 2>&1)"; rc=$?
+chk "10.6 stop that does not take on an idle-with-Monitor seat → REFUSED (exit 3)" "$rc" 3
+chk_contains "…says the session is STILL listed" "$out" "STILL listed"
+chk "…nothing relaunched" "$(grep -c 'argv=--bg' "$CALLS")" 0
+# the twin case: the same sid busy on B and idle-with-Monitor on A is TWO live sessions, not one
+reset_state; write_instance seat-a "$SID" acct-a; write_idle "$ACCT_A" "$SID" 1; write_agents "$ACCT_B" "$SID"
+out="$(seat_session_locate seat-a)"; rc=$?
+chk "10.7 busy on B + idle-with-Monitor on A → TWINS (exit 3)" "$rc" 3
+chk "…two twin lines" "$(grep -c '^twin' <<<"$out")" 2
+out="$("$AIMAIL" seat migrate seat-a alpha --from super --model m --handover-wait 0 2>&1)"; rc=$?
+chk "…and seat migrate REFUSES to pick one" "$rc" 3
+chk "…nothing launched" "$(grep -c 'argv=--bg' "$CALLS")" 0
+reset_state
 printf '\n═══ %d/%d passed ═══\n' "$PASS" $((PASS+FAIL))
 if (( FAIL )); then printf 'FAILED:\n'; printf '  - %s\n' "${FAILURES[@]}"; exit 1; fi
 exit 0

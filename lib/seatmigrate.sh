@@ -367,12 +367,18 @@ seat_session_locate() {
     n_dirs=$((n_dirs+1))
     # ⛔ --all (2026-09-22 18:3x): plain `agents --json` HIDES idle/blocked sessions, so three
     #   limit-blocked leftovers on r2 (code-review, foundation, framing) were invisible to this twin
-    #   check and a migrate stopped the wrong side. Rows in a terminal state are not live.
+    #   check and a migrate stopped the wrong side. Rows in a terminal state are not live (stopped, failed, or `done`
+    #   with nothing in flight -- see _job_in_flight).
     if [[ -d "$dir" ]] && rows="$(_agents_rows "$dir" --all)"; then
       n_ok=$((n_ok+1))
       while IFS= read -r line; do
         [[ -n "$line" ]] || continue
-        case "$(cut -f4 <<<"$line")" in stopped|failed|done) continue ;; esac
+        # `done` is a session IDLE BETWEEN TURNS, not a dead one: while a Monitor (the seat's poller) is in
+        # flight, the next mail wakes it. Only stopped/failed, or `done` with nothing in flight, are dead.
+        case "$(cut -f4 <<<"$line")" in
+          stopped|failed) continue ;;
+          "done") _job_in_flight "$dir" "$(cut -f1 <<<"$line")" || continue ;;
+        esac
         live_lines+=("$dir"$'\t'"$line")
       done <<<"$rows"
     else
@@ -407,13 +413,16 @@ seat_session_locate() {
   if (( ${#uniq[@]} > 1 )); then
     printf 'liveness\ttwin\n'
     for h in "${uniq[@]}"; do
-      IFS=$'\t' read -r dir lsid pid short state status cwd name <<<"$h"
+      # awk fields, never `IFS=$'\t' read`: an idle (`done`) row has an EMPTY pid and status, and consecutive tabs collapse (lib/core.sh)
+      dir="$(_tsv_nth "$h" 1)"; lsid="$(_tsv_nth "$h" 2)"; pid="$(_tsv_nth "$h" 3)"; short="$(_tsv_nth "$h" 4)"; state="$(_tsv_nth "$h" 5)"
       printf 'twin\t%s\t%s\t%s\t%s\t%s\n' "$(_account_label "$dir")" "$lsid" "$pid" "$short" "$state"
     done
     return 3
   fi
   if (( ${#uniq[@]} == 1 )); then
-    IFS=$'\t' read -r dir lsid pid short state status cwd name <<<"${uniq[0]}"
+    h="${uniq[0]}"   # (fields by awk, see the twin branch above: an idle row's empty pid / status must not shift cwd and name)
+    dir="$(_tsv_nth "$h" 1)"; lsid="$(_tsv_nth "$h" 2)"; pid="$(_tsv_nth "$h" 3)"; short="$(_tsv_nth "$h" 4)"; state="$(_tsv_nth "$h" 5)"
+    cwd="$(_tsv_nth "$h" 7)"; name="$(_tsv_nth "$h" 8)"
     printf 'sid\t%s\naccount\t%s\nconfig_dir\t%s\npid\t%s\nshort_id\t%s\nstate\t%s\ncwd\t%s\nname\t%s\nliveness\tlive\nsource\tagents\n' \
       "$lsid" "$(_account_label "$dir")" "$dir" "$pid" "$short" "$state" "$cwd" "$name"
     return 0
@@ -476,8 +485,34 @@ _sid_listed() {
   # `--resume` that hit "source session not found" leaves a `failed` row that used to count as
   # "present", then dropped out during the settle window and read as DISAPPEARED); 2 = unknown.
   local dir="$1" sid="$2"; shift 2
+  # `done` is a session idle between turns: it is LISTED (live) while the scheduler's job file shows something still
+  # in flight in it (a Monitor wakes it on the next mail); with nothing in flight it is dead like stopped/failed.
   local rows; rows="$(_agents_rows "$dir" --all "$@")" || return 2
-  awk -F'\t' -v s="$sid" '$1==s && $4!="failed" && $4!="stopped" && $4!="done" {f=1} END{exit !f}' <<<"$rows"
+  local st
+  while IFS= read -r st; do
+    case "$st" in
+      failed|stopped) continue ;;
+      "done") _job_in_flight "$dir" "$sid" || continue ;;
+    esac
+    return 0
+  done < <(awk -F'\t' -v s="$sid" '$1==s {print $4}' <<<"$rows")
+  return 1
+}
+# _tsv_nth <line> <n> — field N of a tab-separated line, empties kept (never `IFS=$'\t' read`, see lib/core.sh).
+_tsv_nth() { awk -F'\t' -v n="$2" '{print $n}' <<<"$1"; }
+# _job_in_flight <dir> <sid> — 0 when jobs/<short>/state.json says the session still has work in flight (inFlight.tasks
+# or .queued above 0: a Monitor, a background task); 1 when nothing is, or the file is missing or unreadable.
+_job_in_flight() {
+  local spec="$1/jobs/${2:0:8}/state.json"
+  [[ -f "$spec" ]] || return 1
+  python3 -c '
+import json, sys
+try:
+    f = json.load(open(sys.argv[1])).get("inFlight") or {}
+    sys.exit(0 if (int(f.get("tasks") or 0) + int(f.get("queued") or 0)) > 0 else 1)
+except Exception:
+    sys.exit(1)
+' "$spec" 2>/dev/null
 }
 # _job_state <dir> <sid> — "<state>\t<detail>" from the scheduler's own jobs/<short>/state.json, or nothing
 _job_state() {
@@ -813,8 +848,9 @@ seat_migrate() {
        #   Rule: exactly one non-blocked twin + every other twin `blocked` AND on the target account
        #   -> stop the leftovers on the target (verified gone) and carry on. Anything else stays a refusal.
        local _tl _tn=0 _tb=0 _tlabel; _tlabel="$(_account_label "$target_dir")"; local -a _tstop=()
-       while IFS=$'\t' read -r _k _acct _lsid _lpid _lshort _lstate; do
-         [[ "$_k" == "twin" ]] || continue
+       while IFS= read -r _tline; do
+         [[ "$(_tsv_nth "$_tline" 1)" == "twin" ]] || continue
+         _acct="$(_tsv_nth "$_tline" 2)"; _lshort="$(_tsv_nth "$_tline" 5)"; _lstate="$(_tsv_nth "$_tline" 6)"   # awk, not read: an idle twin's pid is empty
          if [[ "$_lstate" == "blocked" && "$_acct" == "$_tlabel" ]]; then _tb=$((_tb+1)); _tstop+=("$_lshort"); else _tn=$((_tn+1)); fi
        done <<<"$loc"
        if (( _tn == 1 && _tb >= 1 )); then
