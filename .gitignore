@@ -11,6 +11,10 @@ etc/aimail.conf
 *.swp
 .DS_Store
 
+# tests/c7_replay.sh's own scratch output (a list of denied command strings from
+# whatever machine it was last run on) -- never a tracked artifact.
+tests/.c7_replay_denied.jsonl.last
+
 # Porting reference — the predecessor's own defect register and design doc.
 # Kept locally because they are the source material for docs/PORTING.md, and
 # NEVER published: they are operational detail about a private project and name
