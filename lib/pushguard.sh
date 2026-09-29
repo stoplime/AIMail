@@ -99,7 +99,7 @@ _pg_hook_status() {
 }
 
 push_guard_status() {
-  _pg_hook_status "$1" pre-push AIMAIL_OWNER_PUSH AIMAIL_STERILITY_TERMS
+  _pg_hook_status "$1" pre-push ALLOW_PUSH AIMAIL_STERILITY_TERMS
 }
 
 # commit_msg_guard_status <repo> — same states as push_guard_status, for the

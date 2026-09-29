@@ -4497,6 +4497,21 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/ask_ledger.sh produced no parseable SUMMARY line (rc=$ASKL_RC)")
 fi
 
+section "pre-push owner gate — tests/push_guard.sh (standalone script, folded in)"
+# Drives the real hooks/sterility_push_guard.sh in its own throwaway git repo. The owner's
+# variable is ALLOW_PUSH=1, the same one every other repo's push lock uses.
+PG_OUT="$(bash "$REPO/tests/push_guard.sh" 2>&1)"; PG_RC=$?
+printf '%s\n' "$PG_OUT" | sed 's/^/  /'
+_pg_nums="$(printf '%s\n' "$PG_OUT" | grep -oE 'push_guard: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+PG_PASS="$(sed -n '1p' <<<"$_pg_nums")"
+PG_FAIL="$(sed -n '2p' <<<"$_pg_nums")"
+if [[ -n "$PG_PASS" && -n "$PG_FAIL" ]]; then
+  PASS=$((PASS+PG_PASS)); FAIL=$((FAIL+PG_FAIL))
+  (( PG_FAIL == 0 && PG_RC == 0 )) || FAILURES+=("tests/push_guard.sh reported $PG_FAIL failure(s), rc=$PG_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/push_guard.sh produced no summary line (rc=$PG_RC)")
+fi
+
 section "doctor"
 accepts "doctor runs"                          -- doctor
 

@@ -28,9 +28,12 @@
 # once, in one seat's own working copy.
 set -euo pipefail
 
-if [[ "${AIMAIL_OWNER_PUSH:-}" != "1" ]]; then
+# The owner's push variable is ALLOW_PUSH=1, the same one every other repo's pre-push lock uses,
+# so there is one variable to remember, not one per repo. AI seats cannot set it: the agent-side
+# command hook refuses any command that sets ALLOW_PUSH, which is what keeps this gate owner-only.
+if [[ "${ALLOW_PUSH:-}" != "1" ]]; then
   echo "⛔ REFUSED (sterility_push_guard): this repo is pushed by its owner only." >&2
-  echo "   AI seats never push. Owner: re-run as  AIMAIL_OWNER_PUSH=1 git push ..." >&2
+  echo "   AI seats never push. Owner: re-run as  ALLOW_PUSH=1 git push ..." >&2
   exit 1
 fi
 
