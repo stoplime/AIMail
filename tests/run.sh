@@ -3959,7 +3959,7 @@ section "main_only_landing_guard — enforcement selftest in-suite (per-repo/per
 # refused on a protected ref); the landing_guard section right below is a DIFFERENT
 # concern (is the hook still resolvable at all, t908) -- both matter, neither substitutes
 # for the other.
-MOLG_EXPECTED_ARMS=17
+MOLG_EXPECTED_ARMS=23
 MOLG="$(bash "$REPO/hooks/main_only_landing_guard.sh" selftest 2>&1)"; MOLG_RC=$?
 while IFS= read -r line; do
   case "$line" in

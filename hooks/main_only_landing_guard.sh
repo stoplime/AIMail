@@ -173,6 +173,77 @@ _ff_ok() {  # _ff_ok <old> <new> <refname>  -> 0 when the move is allowed by the
   [[ "$old" == "$new" ]] && return 0              # no-op
   git merge-base --is-ancestor "$old" "$new" 2>/dev/null
 }
+# ─── pack-refs / gc are not landings (2026-09-28) ───────────────────────────────────────
+# `git gc` (and the auto-gc that `git fetch` starts in the background) runs `git pack-refs
+# --all --prune`, which moves loose refs into packed-refs. Git reports that to this hook as
+# TWO transactions on a protected ref: first a write of the same value into packed-refs
+# (old = zeros, new = the value), then the pruning of the loose file (old = the value, new =
+# zeros). The second reads exactly like a deletion, and the first, to a seat-mapped session,
+# like a landing, so both were refused and `git fetch` failed with "failed to run pack-refs".
+# The ref itself never changed value.
+#
+# WHY THE PARENT PROCESS AND NOT THE VALUE ALONE. "The ref still resolves afterwards" is not
+# a safe test on its own: a REAL delete of a ref that is both loose and packed also shows the
+# packed copy still present while the transaction is only prepared, and `update-ref -d
+# <ref> <sha>` presents the very same old = value, new = zeros shape. What separates them is
+# who is asking: git starts this hook as its own child, so the parent is the git command
+# performing the transaction, and `pack-refs` (which `gc` and `maintenance` both spawn as a
+# child) is the only one that moves a value between the two storage forms without changing
+# it. The move must ALSO leave the value where it was: a write must equal the live value, and a
+# prune must find the same value already in packed-refs. Anything else stays under the normal
+# rules, so a real deletion or rewrite is still refused.
+#
+# Linux reads /proc/<pid>/cmdline; elsewhere `ps` is used. If neither can be read the answer
+# is "not pack-refs", which keeps the old, stricter behaviour.
+_parent_git_subcommand() {
+  local -a argv=()
+  if [[ -r "/proc/$PPID/cmdline" ]]; then
+    mapfile -d '' -t argv < "/proc/$PPID/cmdline" 2>/dev/null || argv=()
+  else
+    read -r -a argv <<<"$(ps -o args= -p "$PPID" 2>/dev/null || true)"
+  fi
+  (( ${#argv[@]} )) || return 0
+  [[ "$(basename -- "${argv[0]}")" == git ]] || return 0
+  local i=1 tok
+  while (( i < ${#argv[@]} )); do
+    tok="${argv[i]}"
+    case "$tok" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env) i=$((i+2)) ;;
+      -*) i=$((i+1)) ;;
+      *) printf '%s' "$tok"; return 0 ;;
+    esac
+  done
+  return 0
+}
+
+# _packed_value <refname> -- the value packed-refs holds for a ref, empty when none.
+_packed_value() {
+  local refname="$1" common line
+  common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git rev-parse --git-common-dir 2>/dev/null || true)"
+  [[ -n "$common" && -r "$common/packed-refs" ]] || return 0
+  while IFS= read -r line; do
+    [[ "$line" == *" $refname" ]] && { printf '%s' "${line%% *}"; return 0; }
+  done < "$common/packed-refs"
+  return 0
+}
+
+# _is_pack_refs_move <old> <new> <refname> -> 0 when this is `git pack-refs` (directly, or via
+# gc / maintenance) storing the ref's CURRENT value in the other form, changing nothing.
+_is_pack_refs_move() {
+  local old="$1" new="$2" refname="$3" live
+  [[ "$(_parent_git_subcommand)" == pack-refs ]] || return 1
+  live="$(git rev-parse -q --verify "$refname" 2>/dev/null || true)"
+  [[ -n "$live" ]] || return 1
+  if _zeros "$new"; then
+    # prune of the loose copy: the value must already sit in packed-refs, and be the live one
+    _zeros "$old" && return 1
+    [[ "$old" == "$live" && "$(_packed_value "$refname")" == "$live" ]]
+  else
+    # write into packed-refs: the value written is the value the ref already has
+    (_zeros "$old" || [[ "$old" == "$new" ]]) && [[ "$new" == "$live" ]]
+  fi
+}
+
 _refuse_nonff_message() {
   local refname="$1" old="$2" new="$3"
   _zeros "$old" && old="$(git rev-parse -q --verify "$refname" 2>/dev/null || echo "$2")"
@@ -357,6 +428,60 @@ case "${1:-}" in
     ( git -C "$repo" update-ref refs/heads/main "$old" "$old" ) >/dev/null 2>&1; rc=$?
     if [[ "$rc" == 0 ]]; then PASS=$((PASS+1)); printf '  ✔ ARM 13: a NO-OP move (old == new) on the protected ref is ALLOWED (rc=%s)\n' "$rc"
     else FAIL=$((FAIL+1)); printf '  ✖ ARM 13 FAILED (rc=%s, wanted 0)\n' "$rc"; fi
+
+    # ── pack-refs / gc arms (2026-09-28): auto-gc in a fetch failed with "failed to run pack-refs" ──
+    # The packing arms run as a seat that is NOT on the allow-list, the hardest case: it is refused
+    # on the "creation" half of the packing as well as on the prune. The delete arms run as seat
+    # 'main' so the seat rule cannot be what refuses them: only the deletion rule is left to.
+    _as() { rm -f "$AIMAIL_ROOT/state/stopguard/session."*; printf '%s' "$1" > "$AIMAIL_ROOT/state/stopguard/session.selftest-pr"; export CLAUDE_CODE_SESSION_ID=selftest-pr; }
+    _as main
+    git -C "$repo" checkout -q main
+    AIMAIL_LANDING_GUARD_REQUIRE_FF=0 git -C "$repo" reset -q --hard "$old"
+    git -C "$repo" config --add main-landing-guard.protected-ref refs/heads/prot3
+    git -C "$repo" update-ref refs/heads/prot3 "$old"            # a LOOSE protected ref
+
+    # ARM 14: `git pack-refs --all --prune` passes and neither protected ref changes value
+    _as notmain
+    ( git -C "$repo" pack-refs --all --prune ) >/dev/null 2>&1; rc=$?
+    m="$(git -C "$repo" rev-parse refs/heads/main)"; q="$(git -C "$repo" rev-parse refs/heads/prot3)"
+    if [[ "$rc" == 0 && "$m" == "$old" && "$q" == "$old" && ! -e "$repo/.git/refs/heads/prot3" ]]; then PASS=$((PASS+1)); printf '  ✔ ARM 14: `git pack-refs --all --prune` PASSES for a non-main seat and the protected refs keep their value (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 14 FAILED (rc=%s, main ok: %s, prot3 ok: %s, prot3 packed: %s)\n' "$rc" "$([[ "$m" == "$old" ]] && echo yes || echo NO)" "$([[ "$q" == "$old" ]] && echo yes || echo NO)" "$([[ ! -e "$repo/.git/refs/heads/prot3" ]] && echo yes || echo NO)"; fi
+
+    # ARM 15: `git gc` passes too, from a LOOSE protected ref (gc is what a fetch starts in the background)
+    _as main
+    git -C "$repo" update-ref refs/heads/prot3 "$new" "$old"     # a real forward move, loose again
+    _as notmain
+    ( git -C "$repo" gc -q ) >/dev/null 2>&1; rc=$?
+    q="$(git -C "$repo" rev-parse refs/heads/prot3)"
+    if [[ "$rc" == 0 && "$q" == "$new" && ! -e "$repo/.git/refs/heads/prot3" ]]; then PASS=$((PASS+1)); printf '  ✔ ARM 15: `git gc` PASSES for a non-main seat and the protected ref keeps its value (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 15 FAILED (rc=%s, prot3 == expected: %s)\n' "$rc" "$([[ "$q" == "$new" ]] && echo yes || echo NO)"; fi
+
+    # ARM 16: a real delete of that now-PACKED protected ref is still REFUSED and the ref survives
+    _as main
+    ( git -C "$repo" update-ref -d refs/heads/prot3 ) >/dev/null 2>&1; rc=$?
+    if [[ "$rc" != 0 ]] && git -C "$repo" rev-parse -q --verify refs/heads/prot3 >/dev/null; then PASS=$((PASS+1)); printf '  ✔ ARM 16: `update-ref -d` on a packed protected ref is still REFUSED and the ref survives (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 16 FAILED (rc=%s)\n' "$rc"; fi
+
+    # ARM 17: the same delete with the old value spelled out. Git presents it as TWO transactions, the
+    # first with old = zeros (refused on its own) and a second shaped exactly like a prune.
+    ( git -C "$repo" update-ref -d refs/heads/prot3 "$new" ) >/dev/null 2>&1; rc=$?
+    if [[ "$rc" != 0 ]] && git -C "$repo" rev-parse -q --verify refs/heads/prot3 >/dev/null; then PASS=$((PASS+1)); printf '  ✔ ARM 17: `update-ref -d <ref> <sha>` is still REFUSED and the ref survives (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 17 FAILED (rc=%s)\n' "$rc"; fi
+
+    # ARM 17b: that second, prune-shaped transaction ALONE (old = the live value, which packed-refs
+    # holds, new = zeros), fed to the hook by something that is not `git pack-refs`. This is the arm
+    # that needs the calling-command check: nothing else in the message tells it from a real prune.
+    ( cd "$repo" && printf '%s %s refs/heads/prot3\n' "$new" "0000000000000000000000000000000000000000" \
+        | bash "$repo/.git/hooks/reference-transaction" prepared ) >/dev/null 2>&1; rc=$?
+    if [[ "$rc" != 0 ]]; then PASS=$((PASS+1)); printf '  ✔ ARM 17b: a prune-shaped deletion that does not come from `git pack-refs` is REFUSED (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 17b FAILED (rc=%s, wanted nonzero)\n' "$rc"; fi
+
+    # ARM 18: global options before the subcommand (`git -c .. -C <dir> pack-refs`) are read through
+    git -C "$repo" update-ref refs/heads/prot3 "$new" "$new" 2>/dev/null
+    _as notmain
+    ( git -c gc.auto=0 -C "$repo" pack-refs --all --prune ) >/dev/null 2>&1; rc=$?
+    if [[ "$rc" == 0 ]]; then PASS=$((PASS+1)); printf '  ✔ ARM 18: `git -c .. -C <dir> pack-refs` is recognised through the global options (rc=%s)\n' "$rc"
+    else FAIL=$((FAIL+1)); printf '  ✖ ARM 18 FAILED (rc=%s)\n' "$rc"; fi
     unset CLAUDE_CODE_SESSION_ID
     echo
     echo "── SUMMARY: $PASS passed, $FAIL failed ──"
@@ -372,6 +497,8 @@ case "${1:-}" in
     while IFS=' ' read -r old_val new_val refname; do
       [[ -n "$refname" ]] || continue
       _is_protected "$refname" || continue
+      # pack-refs / gc only re-store a value the ref already has: never a landing, for anyone.
+      _is_pack_refs_move "$old_val" "$new_val" "$refname" && continue
       # R6(k): the fast-forward rule binds EVERY writer of a protected ref, mapped seat or not.
       if [[ "$require_ff" == 1 ]] && ! _ff_ok "$old_val" "$new_val" "$refname"; then
         _refuse_nonff_message "$refname" "$old_val" "$new_val"
