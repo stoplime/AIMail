@@ -1428,8 +1428,17 @@ else FAIL=$((FAIL+1)); FAILURES+=("throttle flag missing the stay-armed instruct
 printf 'x\n' > "$AIMAIL_ROOT/pk.md"
 "$AIMAIL" send --to main --from main --subject "during park" --body-file "$AIMAIL_ROOT/pk.md" >/dev/null 2>&1
 printf 'at\t%s\n' "$(( $(date +%s) + 3600 ))" > "$(_ramp_at_file)"
+# A fixed sleep here judged "parked" by elapsed time, which a loaded machine turns into a race
+# (a poller that has not yet reached the park loop looks the same as one that ignored it). Wait for
+# the poller's own park heartbeat instead, from a clean heartbeat file, bounded at 60 s.
+rm -f "$AIMAIL_ROOT/state/poller/main.hb"
 "$AIMAIL" poll main > "$AIMAIL_ROOT/park.log" 2>&1 &
-PARKPID=$!; sleep 4
+PARKPID=$!
+for _ in $(seq 1 120); do
+  grep -q '^park_beat' "$AIMAIL_ROOT/state/poller/main.hb" 2>/dev/null && break
+  kill -0 $PARKPID 2>/dev/null || break
+  sleep 0.5
+done
 if kill -0 $PARKPID 2>/dev/null; then
   PASS=$((PASS+1)); printf '  ✔ poller stays ARMED and asleep under a throttle (does not exit)\n'
 else FAIL=$((FAIL+1)); FAILURES+=("poller exited under a throttle"); printf '  ✖ poller exited under a throttle\n'; fi
@@ -1439,7 +1448,9 @@ if (( QD >= 1 )); then
 else FAIL=$((FAIL+1)); FAILURES+=("parked poller consumed mail"); printf '  ✖ parked poller consumed mail\n'; fi
 accepts "ramp clears the throttle"                 -- budget ramp
 printf 'at\t%s\n' "$(( $(date +%s) - 10 ))" > "$(_ramp_at_file)"
-sleep 8
+# Wake time is the poller's own loop interval plus whatever the machine adds; wait for the exit
+# (bounded at 60 s) instead of judging it after a fixed 8 s.
+for _ in $(seq 1 120); do kill -0 $PARKPID 2>/dev/null || break; sleep 0.5; done
 if ! kill -0 $PARKPID 2>/dev/null; then
   PASS=$((PASS+1)); printf '  ✔ the poller woke ITSELF at the ramp — no human, no coordinator\n'
 else
