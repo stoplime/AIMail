@@ -61,6 +61,19 @@ _pg_effective_hooks_dir() {
     || { local gp; gp="$(git -C "$repo" rev-parse --git-path hooks 2>/dev/null)"; [[ "$gp" = /* ]] && printf '%s\n' "$gp" || printf '%s/%s\n' "$repo" "$gp"; }
 }
 
+# _pg_hook_body <hookfile> — the hook's own text followed by the text of each executable
+# .sh script it names (absolute path, or one starting "$HOME/"). One level only: a delegate's
+# own delegates are not followed.
+_pg_hook_body() {
+  local hook="$1" ref path
+  cat "$hook" 2>/dev/null
+  while IFS= read -r ref; do
+    path="${ref/#\$HOME/$HOME}"
+    [[ "$path" == /* && -f "$path" && -x "$path" ]] && cat "$path" 2>/dev/null
+  done < <(grep -oE '(/|\$HOME/)[A-Za-z0-9_./+-]*\.sh' "$hook" 2>/dev/null | sort -u)
+  return 0
+}
+
 # _pg_hook_status <repo> <hookfile e.g. pre-push|commit-msg> <marker> [marker2...] —
 # the shared core both push_guard_status (pre-push) and commit_msg_guard_status
 # (commit-msg) are thin wrappers around (2026-09-24): same states, same resolution
@@ -88,9 +101,15 @@ _pg_hook_status() {
   if [[ ! -x "$target" ]]; then
     printf 'DANGLING\t%s -> %s is not executable -- git skips it silently\n' "$hook" "$target"; return 0
   fi
+  # A wrapper hook is legitimate: it may hand the ref list on to the real guard scripts
+  # (the machine-wide ALLOW_PUSH gate, then hooks/sterility_push_guard.sh), so the markers are
+  # looked for in the hook AND in every executable .sh file it names by absolute or $HOME path.
+  # A delegate that is missing or not executable contributes nothing, so a wrapper whose guard
+  # was moved away or lost its executable bit still reads WRONG_SCRIPT.
+  local body; body="$(_pg_hook_body "$target")"
   local m
   for m in "${markers[@]}"; do
-    grep -q "$m" "$target" 2>/dev/null || {
+    grep -q "$m" <<<"$body" 2>/dev/null || {
       printf 'WRONG_SCRIPT\t%s -> %s is reachable but missing a required marker -- not this guard\n' "$hook" "$target"
       return 0
     }
