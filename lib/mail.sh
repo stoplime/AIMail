@@ -159,6 +159,7 @@ mail_send() {
   # producer, or an output with no consumer, is a design question, not a
   # detail to fix later — so a GREEN verdict is refused here until it says so.
   # Docs-only gates are exempt: they carry no producer or consumer to name.
+  # A code-change GREEN must also carry a Fleet tests: line (see below).
   # ⚠ CASE-SENSITIVE, uppercase GREEN only, and a hyphen does NOT count as a word
   # boundary here (unlike the pronoun guard's own [^[:alnum:]] test above) — a real
   # verdict is always shouted in full caps ("GATE GREEN", "-- GREEN"), but ordinary
@@ -193,6 +194,24 @@ mail_send() {
         "  (verdict text follows)" \
         "" \
         "Kill switch, a human's decision only: AIMAIL_SEND_GREEN_GUARD=0."
+    fi
+    # ─── the fleet-tests line (T-969 / R-009) ──────────────────────────────────
+    # An approval of a code change names the fleet-test run it stands on. On
+    # 2026-09-30 a Platform approval went out without one, and the fleet
+    # registry-isolation test then failed on the very commit it approved. A
+    # Docs-only: gate has no code to run them on; every other GREEN says either
+    # that run_fleet_tests.py passed at the gated sha (paste its summary line) or
+    # `Fleet tests: n/a` with the reason (a change outside the Platform tree).
+    if (( _has_docs_only == 0 )) \
+       && ! grep -qE '^Fleet tests:[[:space:]]*(n/a|.*run_fleet_tests)' "$body"; then
+      rm -f "$body"
+      refused "a GREEN subject on a code change needs a Fleet tests: line in the body." \
+        "The approval has to say what the fleet suite did on the exact tree:" \
+        "" \
+        "  Fleet tests: run_fleet_tests.py --fast passed at <full sha>: Ran N tests, OK" \
+        "  Fleet tests: n/a, <why: e.g. an AIMail change, nothing in the Platform tree>" \
+        "" \
+        "A Docs-only: line is exempt. Kill switch, a human's decision only: AIMAIL_SEND_GREEN_GUARD=0."
     fi
   fi
 

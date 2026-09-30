@@ -370,9 +370,21 @@ printf 'Ship it.\n' > "$AIMAIL_ROOT/green_bare.md"
 refuses "GREEN with neither line is refused" "Producer" \
   -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_bare.md"
 
-printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nShip it.\n' > "$AIMAIL_ROOT/green_full.md"
+printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nFleet tests: n/a, an AIMail change.\nShip it.\n' > "$AIMAIL_ROOT/green_full.md"
 accepts "GREEN with both a producer and a consumer line passes" \
   -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_full.md"
+
+printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nShip it.\n' > "$AIMAIL_ROOT/green_nofleet.md"
+refuses "R-009: GREEN with producer and consumer but no Fleet tests: line is refused" "Fleet tests" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_nofleet.md"
+
+printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nFleet tests:\nShip it.\n' > "$AIMAIL_ROOT/green_emptyfleet.md"
+refuses "R-009: an empty Fleet tests: line does not count" "Fleet tests" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_emptyfleet.md"
+
+printf 'Producer: services/foo.py:12\nConsumer: services/bar.py:34\nFleet tests: run_fleet_tests.py --fast passed at 0123abcd: Ran 289 tests, OK\nShip it.\n' > "$AIMAIL_ROOT/green_fleetpass.md"
+accepts "R-009: a Fleet tests: line naming the run_fleet_tests.py result passes" \
+  -- send --to main --from main --subject "gate GREEN: t123" --body-file "$AIMAIL_ROOT/green_fleetpass.md"
 
 printf 'Docs-only: no code changed.\nShip it.\n' > "$AIMAIL_ROOT/green_docs.md"
 accepts "GREEN with a Docs-only: line passes" \
