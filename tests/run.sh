@@ -2261,7 +2261,9 @@ mkdir -p "$(SEAT_RECORD_DIR)"
 printf 'seat\tsfseat\naccount\tseatacct\nsession_id\tsfsess\n' > "$(SEAT_RECORD_DIR)/sfseat"
 _configured_account_pool
 SFEOF
-GOTSEAT="$(env -i HOME="$SEATHOME" AIMAIL_ROOT="$AIMAIL_ROOT/seatfallback_state" bash "$SEATFALLBACK_SCRIPT" "$REPO" 2>"$AIMAIL_ROOT/.seatfallback.err")"
+# AIMAIL_CONFIG=/dev/null: these two cases are about "no pool configured", and a deployment's own
+# etc/aimail.conf (which sets AIMAIL_FLEET_ACCOUNTS) must not answer for them.
+GOTSEAT="$(env -i HOME="$SEATHOME" AIMAIL_CONFIG=/dev/null AIMAIL_ROOT="$AIMAIL_ROOT/seatfallback_state" bash "$SEATFALLBACK_SCRIPT" "$REPO" 2>"$AIMAIL_ROOT/.seatfallback.err")"
 if [[ "$GOTSEAT" == "seatacct" ]]; then
   PASS=$((PASS+1)); printf '  ✔ with neither config var set, the pool falls back to the live-seat account (seatacct)\n'
 else
@@ -2280,7 +2282,7 @@ fi
 rm -f "$SEATFALLBACK_SCRIPT" "$AIMAIL_ROOT/.seatfallback.err"; rm -rf "$AIMAIL_ROOT/seatfallback_state"
 
 EMPTYHOME="$AIMAIL_ROOT/fakehome_empty"; mkdir -p "$EMPTYHOME"
-env -i HOME="$EMPTYHOME" AIMAIL_ROOT="$AIMAIL_ROOT/empty_state" bash -c "source '$REPO/lib/core.sh'; source '$REPO/lib/budget.sh'; _configured_account_pool" >/dev/null 2>&1
+env -i HOME="$EMPTYHOME" AIMAIL_CONFIG=/dev/null AIMAIL_ROOT="$AIMAIL_ROOT/empty_state" bash -c "source '$REPO/lib/core.sh'; source '$REPO/lib/budget.sh'; _configured_account_pool" >/dev/null 2>&1
 if [[ $? != 0 ]]; then
   PASS=$((PASS+1)); printf '  ✔ an empty pool (no override, no config, no live seats) returns failure, not an empty success\n'
 else
