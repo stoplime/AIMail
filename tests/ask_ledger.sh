@@ -25,6 +25,11 @@ printf 'AIMAIL_ROOT="%s"\nAIMAIL_POLL_INTERVAL=1\n' "$AIMAIL_ROOT" > "$AIMAIL_CO
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf '  ✔ %s\n' "$1"; }
 fail() { FAIL=$((FAIL+1)); printf '  ✖ %s\n' "$1"; }
+# _has <grep args> — `grep -q` that reads ALL of its input first. With `set -o pipefail` a bare
+# `cmd | grep -q X` fails whenever grep matches and exits before `cmd` has finished writing: cmd gets
+# SIGPIPE, the pipeline reads 141, and a passing check reports red. That is the flake this replaces
+# (it shows up only under load, when cmd is slow enough to still be writing).
+_has() { local _all; _all="$(cat)"; grep -q "$@" <<<"$_all"; }
 check() { if [[ "$1" == 0 ]]; then pass "$2"; else fail "$2${3:+ ($3)}"; fi; }
 section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
@@ -53,22 +58,22 @@ section "ask ledger — add / touch / list / show"
 ID1="$("$AIMAIL" ask add --owner alpha --quote "ship the widget" --next "alpha builds" --check "test -f $T/widget.done" --rank 5 2>/dev/null | tail -1)"
 [[ "$ID1" =~ ^k[0-9]{4}$ ]]; check $? "ask add prints an id (got '$ID1')"
 ID2="$("$AIMAIL" ask add --owner beta --quote "owner verdict needed on X" --next "wait" --check "false" 2>/dev/null | tail -1)"
-"$AIMAIL" ask list --owner alpha 2>/dev/null | grep -q "^$ID1 *OPEN *alpha"; check $? "ask list shows the open row with its owner"
-"$AIMAIL" ask show "$ID1" 2>/dev/null | grep -q "^state: *open"; check $? "ask show reads the row's state"
+"$AIMAIL" ask list --owner alpha 2>/dev/null | _has "^$ID1 *OPEN *alpha"; check $? "ask list shows the open row with its owner"
+"$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state: *open"; check $? "ask show reads the row's state"
 "$AIMAIL" ask touch "$ID1" --by alpha --state "half built" --evidence "sha0001" --next "tests" >/dev/null 2>&1
-"$AIMAIL" ask show "$ID1" 2>/dev/null | grep -q "^state_text: *half built"; check $? "ask touch records the current-state snapshot"
-"$AIMAIL" ask show "$ID1" 2>/dev/null | grep -q "^next: *tests"; check $? "ask touch updates the next step"
+"$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state_text: *half built"; check $? "ask touch records the current-state snapshot"
+"$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^next: *tests"; check $? "ask touch updates the next step"
 "$AIMAIL" ask done "$ID1" >/dev/null 2>&1; rc=$?; [[ $rc != 0 ]]; check $? "there is NO manual 'ask done' (refused, rc=$rc)"
 
 section "ask ledger — sweep: the check closes the row, a stale row mails once and escalates once"
 "$AIMAIL" ask sweep >/dev/null 2>&1
-"$AIMAIL" ask show "$ID1" 2>/dev/null | grep -q "^state: *open";   check $? "a failing check leaves the row open"
-"$AIMAIL" ask show "$ID2" 2>/dev/null | grep -q "^state: *waiting_owner"; check $? "a literal 'false' check becomes WAITING-ON-OWNER"
-"$AIMAIL" ask list --owner beta 2>/dev/null | grep -q "WAITING-ON-OWNER"; check $? "ask list labels the owner-verdict row"
+"$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state: *open";   check $? "a failing check leaves the row open"
+"$AIMAIL" ask show "$ID2" 2>/dev/null | _has "^state: *waiting_owner"; check $? "a literal 'false' check becomes WAITING-ON-OWNER"
+"$AIMAIL" ask list --owner beta 2>/dev/null | _has "WAITING-ON-OWNER"; check $? "ask list labels the owner-verdict row"
 _backdate "$ID1" 9 3   # past AIMAIL_ASK_STALE=2 with no touch
 "$AIMAIL" ask sweep >/dev/null 2>&1
-"$AIMAIL" ask list --stale 2>/dev/null | grep -q "^$ID1 *STALE"; check $? "an untouched row past the stale window lists as STALE"
-"$AIMAIL" ask list --stale 2>/dev/null | grep -q "^$ID2"; rc=$?; [[ $rc != 0 ]]; check $? "the waiting-on-owner row is NEVER listed stale"
+"$AIMAIL" ask list --stale 2>/dev/null | _has "^$ID1 *STALE"; check $? "an untouched row past the stale window lists as STALE"
+"$AIMAIL" ask list --stale 2>/dev/null | _has "^$ID2"; rc=$?; [[ $rc != 0 ]]; check $? "the waiting-on-owner row is NEVER listed stale"
 # mail_send only QUEUES (inbox); a message moves to unacked/ on delivery
 # (mail_deliver/poll), never on send itself -- deliver both recipients first.
 "$AIMAIL" deliver alpha >/dev/null 2>&1; "$AIMAIL" deliver sup >/dev/null 2>&1
@@ -88,16 +93,16 @@ grep -q "^STALLED $ID1: ship the widget" "$AIMAIL_OWNER_INBOX" 2>/dev/null; chec
 "$AIMAIL" ask sweep >/dev/null 2>&1
 [[ "$(grep -c "^STALLED $ID1" "$AIMAIL_OWNER_INBOX")" == 1 ]]; check $? "the owner-inbox escalation happens once per episode"
 "$AIMAIL" ask touch "$ID1" --by alpha --state "resumed" >/dev/null 2>&1
-"$AIMAIL" ask list --stale 2>/dev/null | grep -q "^$ID1"; rc=$?; [[ $rc != 0 ]]; check $? "a touch ends the stale episode"
+"$AIMAIL" ask list --stale 2>/dev/null | _has "^$ID1"; rc=$?; [[ $rc != 0 ]]; check $? "a touch ends the stale episode"
 touch "$T/widget.done"
 "$AIMAIL" ask sweep >/dev/null 2>&1
-"$AIMAIL" ask show "$ID1" 2>/dev/null | grep -q "^state: *done"; check $? "a passing check CLOSES the row"
-"$AIMAIL" ask list 2>/dev/null | grep -q "^$ID1"; rc=$?; [[ $rc != 0 ]]; check $? "a done row leaves the default list (--all shows it)"
-"$AIMAIL" ask list --all 2>/dev/null | grep -q "^$ID1 *DONE"; check $? "ask list --all shows DONE"
+"$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state: *done"; check $? "a passing check CLOSES the row"
+"$AIMAIL" ask list 2>/dev/null | _has "^$ID1"; rc=$?; [[ $rc != 0 ]]; check $? "a done row leaves the default list (--all shows it)"
+"$AIMAIL" ask list --all 2>/dev/null | _has "^$ID1 *DONE"; check $? "ask list --all shows DONE"
 ID3="$("$AIMAIL" ask add --owner alpha --quote "withdraw me" --next "n" --check "false" 2>/dev/null | tail -1)"
 "$AIMAIL" ask withdraw "$ID3" >/dev/null 2>&1; rc=$?; [[ $rc != 0 ]]; check $? "withdraw without --owner-approved is refused"
 "$AIMAIL" ask withdraw "$ID3" --owner-approved "drop it, said the owner" >/dev/null 2>&1
-"$AIMAIL" ask show "$ID3" 2>/dev/null | grep -q "^state: *withdrawn"; check $? "withdraw with the owner's quote closes the row"
+"$AIMAIL" ask show "$ID3" 2>/dev/null | _has "^state: *withdrawn"; check $? "withdraw with the owner's quote closes the row"
 
 section "ask ledger — --waiting-on: a REAL check blocked on someone, exempt from stale mail, still auto-closes"
 # ⛔ THE BUG THIS FIXES: a16 (real fleet ledger, not this fixture) had a REAL check that was
@@ -107,14 +112,14 @@ section "ask ledger — --waiting-on: a REAL check blocked on someone, exempt fr
 #   touching its check.
 ID5="$("$AIMAIL" ask add --owner alpha --quote "blocked on carol" --next "n" --check "test -f $T/w5.done" 2>/dev/null | tail -1)"
 "$AIMAIL" ask touch "$ID5" --by alpha --state "blocked" --waiting-on carol >/dev/null 2>&1
-"$AIMAIL" ask show "$ID5" 2>/dev/null | grep -q "^waiting_on: *carol"; check $? "touch --waiting-on sets the column"
-"$AIMAIL" ask list --all 2>/dev/null | grep -q "^$ID5 *WAITING-ON-CAROL"; check $? "ask list labels it WAITING-ON-<seat>, not OPEN/STALE"
+"$AIMAIL" ask show "$ID5" 2>/dev/null | _has "^waiting_on: *carol"; check $? "touch --waiting-on sets the column"
+"$AIMAIL" ask list --all 2>/dev/null | _has "^$ID5 *WAITING-ON-CAROL"; check $? "ask list labels it WAITING-ON-<seat>, not OPEN/STALE"
 _backdate "$ID5" 9 3   # past AIMAIL_ASK_STALE=2
 "$AIMAIL" ask sweep >/dev/null 2>&1
 "$AIMAIL" deliver alpha >/dev/null 2>&1; "$AIMAIL" deliver sup >/dev/null 2>&1
 N5="$(grep -rl "STALE ask $ID5" "$AIMAIL_ROOT/mail/alpha/unacked" "$AIMAIL_ROOT/mail/sup/unacked" 2>/dev/null | wc -l)"
 [[ "$N5" == 0 ]]; check $? "a real-check row blocked --waiting-on is NOT stale-mailed (got $N5)"
-"$AIMAIL" ask list --stale 2>/dev/null | grep -q "^$ID5"; rc=$?; [[ $rc != 0 ]]; check $? "…and never labeled STALE either"
+"$AIMAIL" ask list --stale 2>/dev/null | _has "^$ID5"; rc=$?; [[ $rc != 0 ]]; check $? "…and never labeled STALE either"
 # ⛔⛔ THE GAP FOUND BY DELIBERATELY BREAKING THIS: _ask_is_stale's own --waiting-on guard has
 #   NO coverage through ask_list/ask_state_label (both short-circuit on waiting_on before ever
 #   calling _ask_is_stale) -- removing that guard left every arm above GREEN. Its only other
@@ -127,13 +132,13 @@ N5="$(grep -rl "STALE ask $ID5" "$AIMAIL_ROOT/mail/alpha/unacked" "$AIMAIL_ROOT/
 "$GATECLAIM" --release alphawaitingtest alpha >/dev/null 2>&1
 touch "$T/w5.done"
 "$AIMAIL" ask sweep >/dev/null 2>&1
-"$AIMAIL" ask show "$ID5" 2>/dev/null | grep -q "^state: *done"; check $? "the check STILL closes the row once it passes, even while --waiting-on is set"
+"$AIMAIL" ask show "$ID5" 2>/dev/null | _has "^state: *done"; check $? "the check STILL closes the row once it passes, even while --waiting-on is set"
 # ⛔ THE OTHER DIRECTION: clearing it must restore ordinary stale-mailing -- an
 #   always-exempting flag would just move the blind spot, not fix it.
 ID6="$("$AIMAIL" ask add --owner alpha --quote "will be unblocked" --next "n" --check "test -f $T/w6.done" 2>/dev/null | tail -1)"
 "$AIMAIL" ask touch "$ID6" --by alpha --state "blocked" --waiting-on carol >/dev/null 2>&1
 "$AIMAIL" ask touch "$ID6" --by alpha --state "unblocked" --waiting-on "" >/dev/null 2>&1
-"$AIMAIL" ask show "$ID6" 2>/dev/null | grep -q "^waiting_on: *$"; check $? "--waiting-on '' clears the column"
+"$AIMAIL" ask show "$ID6" 2>/dev/null | _has "^waiting_on: *$"; check $? "--waiting-on '' clears the column"
 _backdate "$ID6" 9 3
 "$AIMAIL" ask sweep >/dev/null 2>&1
 "$AIMAIL" deliver alpha >/dev/null 2>&1
@@ -142,12 +147,12 @@ N6="$(grep -rl "STALE ask $ID6" "$AIMAIL_ROOT/mail/alpha/unacked" 2>/dev/null | 
 # clean up: close ID6 so alpha reads as having no stale row for the claim-gate section below.
 touch "$T/w6.done"; "$AIMAIL" ask sweep >/dev/null 2>&1
 # ⭐ the digest: what a per-row stale mail was replaced with for the blocked case.
-"$AIMAIL" ask digest 2>/dev/null | grep -q "^$ID6"; rc=$?; [[ $rc != 0 ]]; check $? "digest never lists an unblocked row"
+"$AIMAIL" ask digest 2>/dev/null | _has "^$ID6"; rc=$?; [[ $rc != 0 ]]; check $? "digest never lists an unblocked row"
 ID7="$("$AIMAIL" ask add --owner beta --quote "also blocked on carol" --next "n" --check "false2" 2>/dev/null | tail -1)"
 "$AIMAIL" ask touch "$ID7" --by beta --state "blocked" --waiting-on carol >/dev/null 2>&1
-"$AIMAIL" ask digest 2>/dev/null | grep -q "^$ID7.*owed by carol"; check $? "digest lists a blocked row with who it's owed by"
-"$AIMAIL" ask digest nobodyhome 2>/dev/null | grep -q "^$ID7"; rc=$?; [[ $rc != 0 ]]; check $? "digest <who> filters to that one name only"
-"$AIMAIL" ask digest carol 2>/dev/null | grep -q "^$ID7"; check $? "…and finds it under the matching name"
+"$AIMAIL" ask digest 2>/dev/null | _has "^$ID7.*owed by carol"; check $? "digest lists a blocked row with who it's owed by"
+"$AIMAIL" ask digest nobodyhome 2>/dev/null | _has "^$ID7"; rc=$?; [[ $rc != 0 ]]; check $? "digest <who> filters to that one name only"
+"$AIMAIL" ask digest carol 2>/dev/null | _has "^$ID7"; check $? "…and finds it under the matching name"
 
 section "ask ledger — the claim gate refuses a seat that owns a stale open row"
 ID4="$("$AIMAIL" ask add --owner beta --quote "older task" --next "n" --check "test -f $T/never" 2>/dev/null | tail -1)"
@@ -160,23 +165,23 @@ _backdate "$ID4" 2 3   # never touched -- age falls back to asked_at (col 2)
 "$GATECLAIM" --release newshinytask alpha >/dev/null 2>&1
 "$GATECLAIM" newshinytask beta --desc "newer task" --preempt-ok "the owner said: do the new one first" >"$T/gc3.out" 2>&1; rc=$?
 [[ $rc == 0 ]]; check $? "--preempt-ok \"<owner quote>\" lets the claim through"
-"$AIMAIL" ask show "$ID4" 2>/dev/null | grep -q "preempt"; check $? "the preemption is recorded on the stale row as a touch"
+"$AIMAIL" ask show "$ID4" 2>/dev/null | _has "preempt"; check $? "the preemption is recorded on the stale row as a touch"
 "$GATECLAIM" --release newshinytask beta >/dev/null 2>&1; rc=$?; [[ $rc == 0 ]]; check $? "--release is never refused by the ask gate"
 
 section "ask ledger — visibility: fleet counts, role write block, import"
-"$AIMAIL" fleet alpha 2>/dev/null | grep -q "ASKS"; check $? "aimail fleet has an ASKS column"
+"$AIMAIL" fleet alpha 2>/dev/null | _has "ASKS"; check $? "aimail fleet has an ASKS column"
 CNT="$("$AIMAIL" ask counts beta 2>/dev/null)"; [[ "$CNT" == "3/1" || "$CNT" == "3/0" ]]; check $? "ask counts <seat> prints open/stale (beta: $CNT)"
 printf '# handover\nline one\n' > "$T/role.md"
 "$AIMAIL" role write alpha "$T/role.md" >/dev/null 2>&1
 grep -q "aimail:asks:begin" "$AIMAIL_ROOT/roles/alpha.md" 2>/dev/null; rc=$?
-if "$AIMAIL" ask list --owner alpha 2>/dev/null | grep -q "^k"; then check $rc "role write appends the seat's open asks between markers"; else [[ $rc != 0 ]]; check $? "role write appends nothing when the seat has no open asks"; fi
+if "$AIMAIL" ask list --owner alpha 2>/dev/null | _has "^k"; then check $rc "role write appends the seat's open asks between markers"; else [[ $rc != 0 ]]; check $? "role write appends nothing when the seat has no open asks"; fi
 "$AIMAIL" role write alpha "$T/role.md" >/dev/null 2>&1
 [[ "$(grep -c "aimail:asks:begin" "$AIMAIL_ROOT/roles/alpha.md" 2>/dev/null)" -le 1 ]]; check $? "a second role write does not duplicate the block"
 printf 'id\tasked_at\towner\task\tnext\tdone_check\ns01\t09-23 10:2x\talpha\tseeded ask\tnext step\tfalse  # owner verdict\ns02\t09-23 11:00\tbeta\tseeded two\tn2\ttest -f %s/s02.done\n' "$T" > "$T/seed.tsv"
 "$AIMAIL" ask import "$T/seed.tsv" >/dev/null 2>&1
-"$AIMAIL" ask show s01 2>/dev/null | grep -q "^owner: *alpha"; check $? "import preserves ids and owners"
-"$AIMAIL" ask show s01 2>/dev/null | grep -q "^state_text: *owner verdict"; check $? "import moves the check's trailing comment into state_text"
-"$AIMAIL" ask import "$T/seed.tsv" 2>&1 | grep -q "2 already present"; check $? "a second import skips existing ids"
+"$AIMAIL" ask show s01 2>/dev/null | _has "^owner: *alpha"; check $? "import preserves ids and owners"
+"$AIMAIL" ask show s01 2>/dev/null | _has "^state_text: *owner verdict"; check $? "import moves the check's trailing comment into state_text"
+"$AIMAIL" ask import "$T/seed.tsv" 2>&1 | _has "2 already present"; check $? "a second import skips existing ids"
 
 section "aimail land — locked, live-tip, fast-forward only, 3-arg move, verified"
 G="$T/g"; git init -q -b main "$G"; git -C "$G" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
@@ -189,7 +194,7 @@ git -C "$G" checkout -q main; git -C "$G" update-ref refs/heads/main "$BASE"
 grep -q "^  .* A$\|A$" "$T/land1.out" && grep -q "diff --stat" "$T/land1.out"; check $? "the landing prints the oneline log and the stat for the mail"
 "$AIMAIL" land "$G" refs/heads/main "$B" --from sup >"$T/land2.out" 2>&1; rc=$?
 [[ $rc != 0 && "$(git -C "$G" rev-parse main)" == "$A" ]] && grep -q "NON-FAST-FORWARD" "$T/land2.out"; check $? "a sibling (non-FF) landing is REFUSED and the ref is untouched"
-"$AIMAIL" land "$G" refs/heads/main "$A" --from sup 2>&1 | grep -q "already at"; check $? "landing the current tip is a no-op, not an error"
+"$AIMAIL" land "$G" refs/heads/main "$A" --from sup 2>&1 | _has "already at"; check $? "landing the current tip is a no-op, not an error"
 "$AIMAIL" land "$G" refs/heads/nope "$A" --from sup >/dev/null 2>&1; rc=$?; [[ $rc != 0 ]]; check $? "a ref that does not exist is refused (no silent creation)"
 # the two-lander replay: both cut from $A; concurrent land calls -- exactly one wins, nothing lost
 git -C "$G" checkout -q main; git -C "$G" reset -q --hard "$A"
