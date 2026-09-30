@@ -21,8 +21,9 @@ PRESSURE_PROC_ROOT() { printf '%s' "$PRESSURE_PROC_ROOT_DIR"; }
 # the desktop feels it. CRIT below 10%: the OOM killer is close, so new batteries are refused.
 PRESSURE_WARN_AVAIL_PCT=20
 PRESSURE_CRIT_AVAIL_PCT=10
-# Swap used: the kernel swaps cold pages out long before trouble, so a high figure alone is weak,
-# which is why it only warns at 60% and is critical at 85% (almost no swap left to absorb a spike).
+# Swap used: the kernel swaps cold pages out long before trouble, so a high figure alone is weak.
+# It warns above 60%, and is critical above 85% ONLY together with real memory pressure (see
+# pressure_level); by itself it never stops a battery.
 PRESSURE_WARN_SWAP_PCT=60
 PRESSURE_CRIT_SWAP_PCT=85
 # PSI avg60 = percent of the last minute a task waited. Memory "some" > 10: tasks regularly stall on
@@ -112,9 +113,21 @@ pressure_level() {
       _trip WARN "MemAvailable ${PR_MEM_AVAIL_GB}GB is ${pct}% of memory (< ${PRESSURE_WARN_AVAIL_PCT}%)"
     fi
   fi
+  # Swap used only ever creeps up as cold pages move out, so a high figure ALONE says nothing is wrong:
+  # it is critical only together with a second reading that shows real memory pressure (available
+  # memory under the WARN fraction, or memory stalls over their WARN value). Otherwise it stays a
+  # warning. Without this rule a full swap with plenty of free memory would set the stop file and
+  # refuse every battery, with nobody able to override it.
+  local strained=0
+  [[ -n "$PR_MEM_AVAIL_KB" && -n "$PR_MEM_TOTAL_KB" ]] && (( PR_MEM_TOTAL_KB > 0 )) \
+    && (( PR_MEM_AVAIL_KB * 100 / PR_MEM_TOTAL_KB < PRESSURE_WARN_AVAIL_PCT )) && strained=1
+  [[ -n "$PR_MEM_SOME" ]] && (( PR_MEM_SOME > PRESSURE_WARN_MEM_PSI )) && strained=1
   if [[ -n "$PR_SWAP_PCT" ]]; then
-    (( PR_SWAP_PCT > PRESSURE_CRIT_SWAP_PCT )) && _trip CRIT "swap ${PR_SWAP_PCT}% > ${PRESSURE_CRIT_SWAP_PCT}%"
-    (( PR_SWAP_PCT > PRESSURE_WARN_SWAP_PCT && PR_SWAP_PCT <= PRESSURE_CRIT_SWAP_PCT )) && _trip WARN "swap ${PR_SWAP_PCT}% > ${PRESSURE_WARN_SWAP_PCT}%"
+    if (( PR_SWAP_PCT > PRESSURE_CRIT_SWAP_PCT && strained )); then
+      _trip CRIT "swap ${PR_SWAP_PCT}% > ${PRESSURE_CRIT_SWAP_PCT}% with memory under pressure"
+    elif (( PR_SWAP_PCT > PRESSURE_WARN_SWAP_PCT )); then
+      _trip WARN "swap ${PR_SWAP_PCT}% > ${PRESSURE_WARN_SWAP_PCT}%"
+    fi
   fi
   [[ -n "$PR_MEM_FULL" ]] && (( PR_MEM_FULL > PRESSURE_CRIT_MEM_PSI_FULL )) && _trip CRIT "memory PSI full avg60 ${PR_MEM_FULL} > ${PRESSURE_CRIT_MEM_PSI_FULL}"
   [[ -n "$PR_MEM_SOME" ]] && (( PR_MEM_SOME > PRESSURE_WARN_MEM_PSI )) && _trip WARN "memory PSI some avg60 ${PR_MEM_SOME} > ${PRESSURE_WARN_MEM_PSI}"
@@ -330,7 +343,9 @@ battery_scope_prefix() {
 
 # battery_lock_acquire -> 0 when this process holds (or now takes) the one machine-wide battery
 # lock. Non-blocking: a second battery is refused (or keeps waiting in the --wait loop), never
-# run alongside. The lock is on fd 9, so it is released when the wrapper and its children exit.
+# run alongside. The lock is on fd 9, which child processes inherit: it is released when the wrapper AND
+# its children exit, so a worker that outlives its wrapper keeps it until the exit trap, or the orphan
+# reaper after 120 s, kills that worker. That is intended: memory is still held until then.
 battery_lock_acquire() {
   [[ "${BATTERY_LOCK_HELD:-0}" == 1 ]] && return 0
   local lock="$BATTERY_LOCK_FILE"

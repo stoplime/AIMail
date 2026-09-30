@@ -76,7 +76,9 @@ mk_sys 6 8 8 1 0 1;   chk "MemAvailable 6GB of 64 (9.4%, under 10%) is CRIT" "$(
 mk_sys 7 8 8 1 0 1;   chk "MemAvailable 7GB of 64 (10.9%) is WARN, not CRIT" "$(level)" WARN
 mk_sys 40 10 3 1 0 1; chk "swap 70% used is WARN" "$(level)" WARN
 mk_sys 40 10 4 1 0 1; chk "swap 60% used (the ceiling itself) is OK" "$(level)" OK
-mk_sys 40 100 10 1 0 1; chk "swap 90% used is CRIT" "$(level)" CRIT
+mk_sys 40 100 10 1 0 1; chk "swap 90% used with healthy memory is only WARN" "$(level)" WARN
+mk_sys 10 100 10 1 0 1; chk "swap 90% used with MemAvailable under 20% is CRIT" "$(level)" CRIT
+mk_sys 40 100 10 11 0 1; chk "swap 90% used with memory stalls over their WARN value is CRIT" "$(level)" CRIT
 mk_sys 40 8 8 11 0 1; chk "memory PSI some 11 is WARN" "$(level)" WARN
 mk_sys 40 8 8 10 0 1; chk "memory PSI some 10 is OK" "$(level)" OK
 mk_sys 40 8 8 2 6 1;  chk "memory PSI full 6 is CRIT" "$(level)" CRIT
@@ -157,6 +159,9 @@ chk "an OK machine still reaps every tick" "$(printf '%s\n' "${SIGNALS[@]}" | aw
 echo "── ARM 5: the battery guard refuses under pressure and starts when clear ──"
 mk_sys 40 8 8 1 0 1; pressure_stop_clear
 battery_pressure_verdict fast; chk "plenty of memory, no stop file: go" "$?" 0
+mk_sys 40 100 5 1 0 1; fleet_pressure; battery_pressure_verdict fast
+chk "swap 95% with healthy memory does not set the stop file, so a battery is admitted" "$?" 0
+mk_sys 40 8 8 1 0 1; fleet_pressure
 mk_sys 15 8 8 1 0 1
 battery_pressure_verdict fast; chk "15GB free is below the 16GB measured need: refuse" "$?" 1
 chk "the refusal names memory" "$([[ "$BATTERY_PRESSURE_REFUSAL" == *"MemAvailable 15GB"* ]] && echo yes || echo no)" yes
