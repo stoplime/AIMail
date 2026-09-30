@@ -85,6 +85,11 @@ POLLING
 FLEET — who is working, who is reachable, who needs a human
   aimail fleet [seat…]                      the dashboard, with a VERDICT per seat
   aimail who                                alias for fleet
+  aimail fleet pressure                     RAM/CPU pressure check (MemAvailable, swap, PSI): mails the
+                                             supervisor on a level change, sets/clears the battery
+                                             pressure-stop file, reaps leaked pool workers. Also runs
+                                             inside `fleet sweep`; for a per-minute reading add:
+                                               * * * * * aimail fleet pressure >> pressure.log 2>&1
   aimail fleet sweep                        ACTIVE check: mails a supervisor about any
                                              CRASHED/WEDGED seat, or one STALLED past
                                              AIMAIL_STALL_ALERT (default 1200s), unprompted.
@@ -332,6 +337,7 @@ case "$cmd" in
            source "$_SELF/../lib/fleet.sh"
            source "$_SELF/../lib/ask.sh"   # the ASKS column (ask_counts)
            if [[ "${1:-}" == "sweep" ]]; then shift; fleet_sweep "$@"
+           elif [[ "${1:-}" == "pressure" ]]; then shift; fleet_pressure "$@"
            elif [[ "${1:-}" == "watchdog" ]]; then
              shift
              source "$_SELF/../lib/budget.sh"      # ACCOUNT_CONFIG_DIR, _autopilot_seat_groups, account_id

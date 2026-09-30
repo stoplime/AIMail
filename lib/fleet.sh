@@ -884,6 +884,8 @@ EOF
 #   REARM_GRACE (3 min) on purpose, since REARM_GRACE exists to label the
 #   dashboard for a HUMAN reading it live, not to gate an unattended alert.
 STALL_ALERT="${AIMAIL_STALL_ALERT:-1200}"
+# shellcheck source=pressure.sh
+source "$(dirname "${BASH_SOURCE[0]}")/pressure.sh"
 SWEEP_ALERT_DIR() { echo "$STATE_DIR/sweep_alerted"; }
 
 # ─── disk/worktree watchdog — T-804 (project owner, post disk-full incident, 2026-09-09) ──────
@@ -1536,5 +1538,9 @@ fleet_sweep() {
   # capacity crossed with real unowned backlog, instead of disk/worktree bloat) -- a failure
   # here must never abort the checks above it either.
   idle_backlog_sweep || warn "sweep: idle_backlog_sweep failed (non-fatal, checks above already ran)"
+
+  # RAM/CPU pressure + orphan reaper: same tick, same alert channel. Also runs on its own
+  # every minute via `aimail fleet pressure`; a failure here must never abort the checks above.
+  fleet_pressure || warn "sweep: fleet_pressure failed (non-fatal, checks above already ran)"
   return 0
 }

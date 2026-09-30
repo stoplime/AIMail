@@ -3167,6 +3167,25 @@ accepts "register a seat that will crash" -- seat add crashy "will crash"
 mkdir -p "$AIMAIL_ROOT/state/poller"
 printf 'pid\t999999\nppid\t1\nstarted\t%s\nbeat\t%s\n' "$(date +%s)" "$(date +%s)" \
   > "$AIMAIL_ROOT/state/poller/crashy.hb"
+# fleet sweep also runs the RAM/CPU pressure check (lib/pressure.sh), which reads the machine's real
+# /proc. This block counts the mails the SEAT-health sweep sends, so the real memory must not add one,
+# and the library reads no environment variable a test could set. From here to the end of the file
+# $AIMAIL is therefore a COPY of the tree whose pressure.sh points at a healthy fake /proc.
+PCOPY="$AIMAIL_ROOT/pcopy"; mkdir -p "$PCOPY" "$AIMAIL_ROOT/fakeproc"
+tar -C "$REPO" --exclude=.git -cf - . | tar -C "$PCOPY" -xf -
+sed -i "s#^PRESSURE_PROC_ROOT_DIR=/proc#PRESSURE_PROC_ROOT_DIR=$AIMAIL_ROOT/fakeproc#" "$PCOPY/lib/pressure.sh"
+printf 'MemTotal: 67108864 kB\nMemAvailable: 3145728 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' > "$AIMAIL_ROOT/fakeproc/meminfo"
+AIMAIL="$PCOPY/bin/aimail"
+# `aimail fleet pressure` is a real subcommand: a low-memory fake /proc sets the battery stop file, a
+# healthy one clears it (an unregistered supervisor means no mail, so the sweep counts below are untouched).
+AIMAIL_SUPERVISOR=nobody-registered accepts "fleet pressure runs on a low-memory machine" -- fleet pressure
+_pchk() { # _pchk DESC EXIT_CODE_OF_CONDITION
+  if [ "$2" -eq 0 ]; then PASS=$((PASS+1)); printf '  ✔ %s\n' "$1"
+  else FAIL=$((FAIL+1)); FAILURES+=("$1"); printf '  ✖ %s\n' "$1"; fi; }
+[ -f "$AIMAIL_ROOT/state/pressure/pressure-stop" ]; _pchk "fleet pressure sets the stop file on CRIT" $?
+printf 'MemTotal: 67108864 kB\nMemAvailable: 67108864 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' > "$AIMAIL_ROOT/fakeproc/meminfo"
+AIMAIL_SUPERVISOR=nobody-registered accepts "fleet pressure runs on a healthy machine" -- fleet pressure
+[ ! -f "$AIMAIL_ROOT/state/pressure/pressure-stop" ]; _pchk "fleet pressure clears the stop file when healthy" $?
 AIMAIL_SUPERVISOR=sweepvisor accepts "sweep runs" -- fleet sweep
 SWEEP1=$(find "$AIMAIL_ROOT/mail/sweepvisor" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
 if (( SWEEP1 == 1 )); then
@@ -4525,7 +4544,8 @@ else
 fi
 
 section "doctor"
-accepts "doctor runs"                          -- doctor
+# doctor checks the real tree's git hooks, which the throwaway copy $AIMAIL points at does not have
+AIMAIL="$REPO/bin/aimail" accepts "doctor runs"  -- doctor
 
 # ══════════════════════════════════════════════════════════════════════════════
 TOTAL=$((PASS+FAIL))

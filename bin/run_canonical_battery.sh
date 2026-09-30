@@ -263,6 +263,9 @@ summ() { printf '%s\n' "$*" | tee -a "$SUMMARY"; }
 # worktree's copy, so a gate on this file never reads main's version by accident).
 AIMAIL_BIN_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AIMAIL_BIN_SELF/battery_queue.sh"
+# RAM/CPU guard (lib/pressure.sh): pressure-stop / measured-need refusal, one battery machine-wide,
+# the capped-scope command prefix, and the descendant reaper used by the exit trap.
+. "$AIMAIL_BIN_SELF/../lib/pressure.sh"
 EARLY_CLAIMED=0
 RELEASED=1
 
@@ -349,6 +352,15 @@ echo "▶ concurrency budget: occupancy=${OCCUPANCY}/${BUDGET} worker slots (+${
 _refuse_line() { BUDGET_REFUSAL+="$1"$'\n'; }
 budget_verdict() {
 BUDGET_REFUSAL=""
+if ! battery_pressure_verdict "$GATE"; then
+    _refuse_line "⛔ ${BATTERY_PRESSURE_REFUSAL}"
+    _refuse_line "   (lib/pressure.sh: the pressure watchdog's stop file, or less free memory than the measured battery peak needs)"
+    return 1
+fi
+if ! battery_lock_acquire; then
+    _refuse_line "⛔ REFUSED: another battery holds the machine-wide lock (${BATTERY_LOCK_FILE}); one battery at a time"
+    return 1
+fi
 if [ "$FREE_GIB" != "(unmeasured)" ] && [ "$FREE_GIB" -lt 6 ]; then
     _refuse_line "⛔ REFUSED: available memory below the budget floor (6 GiB) -- ${FREE_GIB}Gi available"
     _refuse_line "   (fable's ruling, 2026-09-09 03:37, after memory pressure killed a FULL battery"
@@ -666,6 +678,9 @@ LOG="/tmp/canonical_battery_${SEAT}_${TS}.log"
 on_exit_or_signal() {
     local sig="${1:-EXIT}"
     bq_unreserve "$SEAT" "$$"
+    # Reap this run's own workers: a pool worker that outlives its run keeps its memory and, as
+    # an orphan of pid 1, is invisible to every later battery's accounting.
+    battery_reap_descendants "$$"
     # A fleet-tests run started alongside the Platform tests must not outlive a killed gate.
     if [ -n "${FLEET_PID:-}" ] && kill -0 "$FLEET_PID" 2>/dev/null; then
         pkill -TERM -P "$FLEET_PID" 2>/dev/null
@@ -726,17 +741,19 @@ echo "▶ running canonical battery ($GATE) ... (log: $LOG)"
 # FLEET TESTS, started here so they run alongside the Platform tests (they need about 40 s of a
 # machine that is otherwise busy for 10+ minutes, so running them after adds that time to every gate).
 # The result is collected below, where the step used to run; nothing about its verdict changes.
+battery_scope_prefix
+summ "▶ resource cap:    ${BATTERY_PREFIX[*]}${BATTERY_SCOPE_NOTE:+  (⚠ $BATTERY_SCOPE_NOTE)}"
 FLEET_RUNNER="$PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py"
 FLEET_PID=""
 FLEET_LOG="/tmp/canonical_battery_fleet_${SEAT}_${TS}.log"
 if [ -f "$FLEET_RUNNER" ]; then
-    ( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
+    ( cd "$WORKTREE" && ${BATTERY_PREFIX[@]+"${BATTERY_PREFIX[@]}"} env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
         "$CONDA_PY" "$FLEET_RUNNER" --checkout "$WORKTREE" --fast --jobs 4 ) > "$FLEET_LOG" 2>&1 &
     FLEET_PID=$!
 fi
 
 TESTS_STARTED=1
-( cd "$WORKTREE" && env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
+( cd "$WORKTREE" && ${BATTERY_PREFIX[@]+"${BATTERY_PREFIX[@]}"} env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
     "$CONDA_PY" run_unit_tests.py "${TIER_FLAG[@]}" ) > "$LOG" 2>&1
 BATTERY_EXIT=$?
 TESTS_COMPLETED=1

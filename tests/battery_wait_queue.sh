@@ -20,6 +20,17 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export BATTERY_QUEUE_DIR="$TMP/queue"
 export AIMAIL_CLAIMS="$TMP/claims"
+# the RAM guard is tested in tests/pressure_watchdog.sh; here the real machine's memory, lock and
+# stop file must not decide these arms
+# The library reads no environment variable, so these arms run a COPY of the tree whose pressure.sh
+# points at a fake /proc, a temp state dir and a temp lock.
+FP="$TMP/fakeproc"; mkdir -p "$FP" "$TMP/repo"
+cp -r "$BIN" "$(dirname "$BIN")/lib" "$(dirname "$BIN")/etc" "$TMP/repo/"
+printf 'MemTotal: 67108864 kB\nMemAvailable: %s kB\n' $((40*1048576)) > "$FP/meminfo"
+sed -i -e "s#^PRESSURE_PROC_ROOT_DIR=/proc#PRESSURE_PROC_ROOT_DIR=$FP#" \
+       -e "s#^PRESSURE_STATE_PATH=\"\"#PRESSURE_STATE_PATH=\"$TMP/pressure\"#" \
+       -e "s#^BATTERY_LOCK_FILE=.*#BATTERY_LOCK_FILE=$TMP/battery.lock#" "$TMP/repo/lib/pressure.sh"
+W="$TMP/repo/bin/run_canonical_battery.sh"
 mkdir -p "$AIMAIL_CLAIMS" "$TMP/wt"
 OTHER=99999991   # a fake live pid; never our own
 export BATTERY_QUEUE_LIVE_PIDS="$OTHER"
@@ -85,6 +96,27 @@ chk "admitted FULL exits 0 (test knob)" "$rc" "0"
 chk "claim line in the summary" "$(printf '%s' "$out" | grep -ci 'CLAIMED sharedcorpus')" "1"
 chk "claim released on exit" "$([ -d "$AIMAIL_CLAIMS/sharedcorpus" ] && echo held || echo free)" "free"
 chk "release line in the summary" "$(printf '%s' "$out" | grep -ci 'RELEASED sharedcorpus')" "1"
+
+echo "── ARM 8: wrapper -- the RAM guard (fake /proc): low MemAvailable refuses, enough starts; stop file refuses; held lock refuses ──"
+printf 'MemTotal: 67108864 kB\nMemAvailable: %s kB\n' $((8*1048576)) > "$FP/meminfo"
+out=$(BATTERY_QUEUE_EXIT_AFTER_ADMIT=1 bash "$W" --gate fast "$TMP/wt" bqtest 2>&1); rc=$?
+chk "8 GB free under the 16 GB measured need: the wrapper refuses to start" "$([ "$rc" -ne 0 ] && echo refused || echo started)" "refused"
+chk "the refusal names available memory" "$(printf '%s' "$out" | grep -c 'MemAvailable 8GB is below the measured need 16GB')" "1"
+printf 'MemTotal: 67108864 kB\nMemAvailable: %s kB\n' $((40*1048576)) > "$FP/meminfo"
+out=$(BATTERY_QUEUE_EXIT_AFTER_ADMIT=1 BATTERY_WAIT_POLL_S=1 bash "$W" --gate fast --wait 1 "$TMP/wt" bqtest 2>&1); rc=$?
+chk "40 GB free: admitted" "$rc" "0"
+mkdir -p "$TMP/pressure"; echo "now crit" > "$TMP/pressure/pressure-stop"
+out=$(BATTERY_QUEUE_EXIT_AFTER_ADMIT=1 bash "$W" --gate fast "$TMP/wt" bqtest 2>&1); rc=$?
+chk "stop file set: the wrapper refuses to start" "$([ "$rc" -ne 0 ] && echo refused || echo started)" "refused"
+chk "the refusal names the stop file" "$(printf '%s' "$out" | grep -c 'pressure-stop is set')" "1"
+rm -f "$TMP/pressure/pressure-stop"
+exec 8>"$TMP/battery.lock"; flock -n 8
+out=$(BATTERY_QUEUE_EXIT_AFTER_ADMIT=1 bash "$W" --gate fast "$TMP/wt" bqtest 2>&1); rc=$?
+chk "another battery holds the lock: the wrapper refuses to start" "$([ "$rc" -ne 0 ] && echo refused || echo started)" "refused"
+chk "the refusal says one battery at a time" "$(printf '%s' "$out" | grep -c 'one battery at a time')" "1"
+flock -u 8; exec 8>&-
+out=$(BATTERY_QUEUE_EXIT_AFTER_ADMIT=1 BATTERY_WAIT_POLL_S=1 bash "$W" --gate fast --wait 1 "$TMP/wt" bqtest 2>&1); rc=$?
+chk "lock free again: admitted" "$rc" "0"
 
 TOTAL=$((PASS+FAIL))
 printf '\n%s passed, %s failed, %s total\n' "$PASS" "$FAIL" "$TOTAL"
