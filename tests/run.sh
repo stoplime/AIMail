@@ -4542,6 +4542,22 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/ask_ledger.sh produced no parseable SUMMARY line (rc=$ASKL_RC)")
 fi
 
+section "drop-prevention guards — tests/drop_guards.sh (standalone script, folded in)"
+# Prompt ledger + Stop gate, parking needs a date or trigger, work mail cites an ask id, the
+# open-asks digest. Its own throwaway root (separate bash process); counts folded in like the
+# ask ledger's above.
+DG_OUT="$(bash "$REPO/tests/drop_guards.sh" 2>&1)"; DG_RC=$?
+printf '%s\n' "$DG_OUT" | sed 's/^/  /'
+_dg_nums="$(printf '%s\n' "$DG_OUT" | grep -oE 'SUMMARY: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+DG_PASS="$(sed -n '1p' <<<"$_dg_nums")"
+DG_FAIL="$(sed -n '2p' <<<"$_dg_nums")"
+if [[ -n "$DG_PASS" && -n "$DG_FAIL" ]]; then
+  PASS=$((PASS+DG_PASS)); FAIL=$((FAIL+DG_FAIL))
+  (( DG_FAIL == 0 && DG_RC == 0 )) || FAILURES+=("tests/drop_guards.sh reported $DG_FAIL failure(s), rc=$DG_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/drop_guards.sh produced no parseable SUMMARY line (rc=$DG_RC)")
+fi
+
 section "pre-push owner gate — tests/push_guard.sh (standalone script, folded in)"
 # Drives the real hooks/sterility_push_guard.sh in its own throwaway git repo. The owner's
 # variable is ALLOW_PUSH=1, the same one every other repo's push lock uses.

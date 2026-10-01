@@ -38,6 +38,16 @@
 # Visibility: `aimail fleet` (OPEN/STALE per seat), `aimail role write` (a seat's open rows are
 # appended to its handover between markers), `aimail session` (printed at boot).
 #
+# PARKING NEEDS A DATE OR A NAMED TRIGGER (drop-prevention guard 2). A row can be parked on
+# someone (`--waiting-on`) only together with `--until <date>` (when the park ends and the row
+# is stale-eligible again) or `--trigger "<the named event that ends it>"`; a park with neither
+# is refused. An expired `--until` un-parks the row: it is listed STALE and escalated like any
+# other untouched row. `ask park` is the same operation as a touch with a required park.
+#
+# THE OWNER'S DIGEST (guard 4): `aimail ask owner-digest` lists every open ask on one screen --
+# owner seat, age, state, park date or trigger, next step -- plus the count of owner prompts not
+# yet triaged (lib/prompts.sh), so "what is still owed" is one command, not a mailbox crawl.
+#
 # Generic by design: no owner, company, project or seat names live in this file; seats come
 # from the registry, the supervisor from AIMAIL_SUPERVISOR.
 
@@ -50,7 +60,9 @@ ASK_SEQ()   { echo "$STATE_DIR/asks.seq"; }
 #  9 last_touch(epoch)  10 touched_by  11 state_text  12 evidence  13 done_at  14 done_output
 # 15 stale_mailed_at  16 escalated_at  17 asked_at_text (as given on import, else "")
 # 18 waiting_on (seat name, or empty) -- see ask_touch's own --waiting-on
-ASK_NCOLS=18
+# 19 park_until (epoch the park ends, 0/empty = none)  20 park_trigger (named event, or empty)
+# 21 prompt_id (the owner prompt this ask was triaged from, or empty)
+ASK_NCOLS=21
 ASK_STATES="open waiting_owner done withdrawn"
 
 _ask_clean() { printf '%s' "$1" | tr '\t\n\r' '   '; }
@@ -66,7 +78,7 @@ _ask_locked() {  # _ask_locked <fn> [args…]  -- run fn under the ledger lock
 
 _ask_ensure_file() {
   local f; f="$(ASK_FILE)"
-  [[ -f "$f" ]] || printf 'id\tasked_at\towner\task\tnext\tcheck\trank\tstate\tlast_touch\ttouched_by\tstate_text\tevidence\tdone_at\tdone_output\tstale_mailed_at\tescalated_at\tasked_at_text\twaiting_on\n' > "$f"
+  [[ -f "$f" ]] || printf 'id\tasked_at\towner\task\tnext\tcheck\trank\tstate\tlast_touch\ttouched_by\tstate_text\tevidence\tdone_at\tdone_output\tstale_mailed_at\tescalated_at\tasked_at_text\twaiting_on\tpark_until\tpark_trigger\tprompt_id\n' > "$f"
 }
 
 _ask_next_id() {
@@ -107,26 +119,38 @@ _ask_age() {
   echo $(( $(now_epoch) - lt ))
 }
 
-_ask_is_stale() {  # open row, untouched past the stale window, and not --waiting-on blocked
+# A row is PARKED while it names who it waits on AND its park has not run out. A park with a
+# date ends at that date (the row is then stale-eligible again); a park with only a trigger
+# lasts until a touch clears it; a legacy park with neither (written before parking needed
+# one) stays parked and is flagged "no date" in the digest.
+_ask_parked() {  # <row> -> rc 0 when currently parked
+  local row="$1" until_at
+  [[ -n "$(_ask_field "$row" 18)" ]] || return 1
+  until_at="$(_ask_field "$row" 19)"
+  [[ "$until_at" =~ ^[0-9]+$ ]] && (( until_at > 0 )) && (( until_at <= $(now_epoch) )) && return 1
+  return 0
+}
+
+_ask_is_stale() {  # open row, untouched past the stale window, and not currently parked
   local row="$1" st; st="$(_ask_field "$row" 8)"
   [[ "$st" == "open" ]] || return 1
-  [[ -z "$(_ask_field "$row" 18)" ]] || return 1
+  _ask_parked "$row" && return 1
   (( $(_ask_age "$row") > $(_ask_stale_sec) ))
 }
 
 # ─── add ─────────────────────────────────────────────────────────────────────────────────
 _ask_add_locked() {
-  local owner="$1" quote="$2" next="$3" check="$4" rank="$5" id
+  local owner="$1" quote="$2" next="$3" check="$4" rank="$5" prompt_id="${6:-}" id
   _ask_ensure_file
   id="$(_ask_next_id)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$id" "$(now_epoch)" "$owner" "$(_ask_clean "$quote")" "$(_ask_clean "$next")" \
-    "$(_ask_clean "$check")" "$rank" "open" 0 "" "" "" 0 "" 0 0 "" "" >> "$(ASK_FILE)"
+    "$(_ask_clean "$check")" "$rank" "open" 0 "" "" "" 0 "" 0 0 "" "" 0 "" "$prompt_id" >> "$(ASK_FILE)"
   printf '%s\n' "$id"
 }
 
 ask_add() {
-  local owner="" quote="" next="" check="" rank=100
+  local owner="" quote="" next="" check="" rank=100 prompt_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --owner) owner="${2:-}"; shift 2 ;;
@@ -134,15 +158,23 @@ ask_add() {
       --next)  next="${2:-}";  shift 2 ;;
       --check) check="${2:-}"; shift 2 ;;
       --rank)  rank="${2:-}";  shift 2 ;;
+      --prompt) prompt_id="${2:-}"; shift 2 ;;
       *) refused "ask add: unknown argument '$1'" ;;
     esac
   done
   [[ -n "$owner" && -n "$quote" && -n "$next" && -n "$check" ]] || refused \
-    "usage: aimail ask add --owner <seat> --quote \"<owner's words>\" --next \"<step>\" --check '<shell predicate>' [--rank N]" \
+    "usage: aimail ask add --owner <seat> --quote \"<owner's words>\" --next \"<step>\" --check '<shell predicate>' [--rank N] [--prompt <p####>]" \
     "  --check 'false' means: closes only on the owner's verdict (listed as WAITING-ON-OWNER, never stale-escalated)."
   owner="$(seat_resolve "$owner")" || exit $?
   [[ "$rank" =~ ^[0-9]+$ ]] || refused "ask add: --rank must be a non-negative integer"
-  local id; id="$(_ask_locked _ask_add_locked "$owner" "$quote" "$next" "$check" "$rank")"
+  if [[ -n "$prompt_id" ]]; then
+    # --prompt <p####> links this ask to the owner prompt it came from AND triages that prompt
+    # in the same step (lib/prompts.sh), so "capture the prompt, add the ask" is one command.
+    source "$(dirname "${BASH_SOURCE[0]}")/prompts.sh"
+    prompt_exists "$prompt_id" || refused "ask add: no such captured prompt '$prompt_id' (aimail prompt list)"
+  fi
+  local id; id="$(_ask_locked _ask_add_locked "$owner" "$quote" "$next" "$check" "$rank" "$prompt_id")"
+  [[ -n "$prompt_id" ]] && prompt_triage "$prompt_id" --ask "$id" --by "$owner" >/dev/null
   ok "ask $id added — owner $owner, rank $rank: $(_ask_clean "$quote")"
   printf '%s\n' "$id"
 }
@@ -160,23 +192,40 @@ ask_add() {
 _ASK_WAITING_ON_UNSET='__ask_waiting_on_not_given__'
 
 _ask_touch_locked() {
-  local id="$1" by="$2" state="$3" evidence="$4" next="$5" waiting_on="$6" row st
+  local id="$1" by="$2" state="$3" evidence="$4" next="$5" waiting_on="$6" until_at="$7" trigger="$8" row st
   row="$(_ask_row "$id")"; [[ -n "$row" ]] || refused "ask touch: no such ask '$id'"
   st="$(_ask_field "$row" 8)"
   [[ "$st" == "open" || "$st" == "waiting_owner" ]] || refused "ask touch: '$id' is $st, not open"
   local prog='$9=now; $10="'"$(_ask_clean "$by")"'"; $11="'"$(_ask_clean "$state")"'"'
   [[ -n "$evidence" ]] && prog="$prog"'; $12="'"$(_ask_clean "$evidence")"'"'
   [[ -n "$next" ]]     && prog="$prog"'; $5="'"$(_ask_clean "$next")"'"'
-  [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && prog="$prog"'; $18="'"$(_ask_clean "$waiting_on")"'"'
+  if [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]]; then
+    # a park (non-empty waiting_on) carries its date and/or trigger; clearing it clears both
+    prog="$prog"'; $18="'"$(_ask_clean "$waiting_on")"'"; $19='"${until_at:-0}"'; $20="'"$(_ask_clean "$trigger")"'"'
+  fi
   # a touch ends the stale episode: the next stale mail / escalation is allowed again
   prog="$prog"'; $15=0; $16=0'
   _ask_rewrite "$id" "$prog"
 }
 
+# _ask_parse_until <text> -> epoch on stdout, or rc 1. Accepts an absolute date/time
+# ("2026-10-05", "2026-10-05 14:00") or a relative one ("+3d", "+12h"). Must lie in the future:
+# a park that is already over is not a park.
+_ask_parse_until() {
+  local t="$1" e
+  case "$t" in
+    +[0-9]*d) e=$(( $(now_epoch) + ${t//[^0-9]/} * 86400 )) ;;
+    +[0-9]*h) e=$(( $(now_epoch) + ${t//[^0-9]/} * 3600 )) ;;
+    *) e="$(date -d "$t" +%s 2>/dev/null)" || return 1 ;;
+  esac
+  [[ "$e" =~ ^[0-9]+$ ]] && (( e > $(now_epoch) )) || return 1
+  printf '%s' "$e"
+}
+
 ask_touch() {
   local id="${1:-}"; shift || true
-  [[ -n "$id" ]] || refused "usage: aimail ask touch <id> --by <seat> --state \"<where it stands>\" [--evidence <sha|path|mail id>] [--next \"<step>\"] [--waiting-on <seat>|'']"
-  local by="" state="" evidence="" next="" waiting_on="$_ASK_WAITING_ON_UNSET"
+  [[ -n "$id" ]] || refused "usage: aimail ask touch <id> --by <seat> --state \"<where it stands>\" [--evidence <sha|path|mail id>] [--next \"<step>\"] [--waiting-on <seat> (--until <date> | --trigger \"<event>\")|'']"
+  local by="" state="" evidence="" next="" waiting_on="$_ASK_WAITING_ON_UNSET" until_text="" trigger=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --by) by="${2:-}"; shift 2 ;;
@@ -184,6 +233,8 @@ ask_touch() {
       --evidence) evidence="${2:-}"; shift 2 ;;
       --next) next="${2:-}"; shift 2 ;;
       --waiting-on) waiting_on="${2:-}"; shift 2 ;;
+      --until) until_text="${2:-}"; shift 2 ;;
+      --trigger) trigger="${2:-}"; shift 2 ;;
       *) refused "ask touch: unknown argument '$1'" ;;
     esac
   done
@@ -195,8 +246,37 @@ ask_touch() {
   #   field (deliberately generic here: no operator/company/project name belongs in this
   #   shared source -- see lib/sterility.sh's own header).
   [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && waiting_on="$(_ask_clean "$waiting_on")"
-  _ask_locked _ask_touch_locked "$id" "$by" "$state" "$evidence" "$next" "$waiting_on"
-  ok "ask $id touched by $by: $(_ask_clean "$state")$( [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && printf ' (waiting_on=%s)' "${waiting_on:-<cleared>}" )"
+  local until_at=""
+  if [[ "$waiting_on" == "$_ASK_WAITING_ON_UNSET" || -z "$waiting_on" ]]; then
+    # no park is being set (nothing given, or an explicit clear): a date/trigger would be orphaned
+    [[ -z "$until_text" && -z "$trigger" ]] || refused "ask touch: --until/--trigger only go with --waiting-on <who>." \
+      "  They say when and why a PARK ends; without --waiting-on there is no park to attach them to."
+  else
+    # ⛔ DROP-PREVENTION GUARD 2: parking an ask needs a date or a named trigger. A row parked on
+    #   "someone" with no end is exactly how an ask is forgotten: nothing ever brings it back.
+    [[ -n "$until_text" || -n "$trigger" ]] || refused \
+      "ask touch: parking '$id' on '$waiting_on' needs --until <date> or --trigger \"<the named event that ends the park>\"." \
+      "  A park with no end date and no named trigger is how an ask gets dropped: nothing brings it back." \
+      "  Examples: --until 2026-10-05   --until +3d   --trigger \"owner answers the scope question\"."
+    if [[ -n "$until_text" ]]; then
+      until_at="$(_ask_parse_until "$until_text")" || refused \
+        "ask touch: --until '$until_text' is not a future date." \
+        "  Use YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +Nd or +Nh, in the future."
+    fi
+    trigger="$(_ask_clean "$trigger")"
+  fi
+  _ask_locked _ask_touch_locked "$id" "$by" "$state" "$evidence" "$next" "$waiting_on" "$until_at" "$trigger"
+  ok "ask $id touched by $by: $(_ask_clean "$state")$( [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && printf ' (waiting_on=%s%s%s)' "${waiting_on:-<cleared>}" "${until_at:+, until $(date -d @"$until_at" '+%F %H:%M')}" "${trigger:+, trigger: $trigger}" )"
+}
+
+# ask park <id> --by <seat> --state "<why>" --waiting-on <who> (--until <date> | --trigger "<event>")
+# The explicit verb for the same operation: a touch that PARKS the row. Identical rules.
+ask_park() {
+  local id="${1:-}"; shift || true
+  [[ -n "$id" ]] || refused "usage: aimail ask park <id> --by <seat> --state \"<why parked>\" --waiting-on <who> (--until <date> | --trigger \"<event>\")"
+  local a have=0; for a in "$@"; do [[ "$a" == "--waiting-on" ]] && have=1; done
+  (( have )) || refused "ask park: --waiting-on <who> is required (who or what the ask is parked on)."
+  ask_touch "$id" "$@"
 }
 
 # ─── withdraw (the ONLY hand close) ─────────────────────────────────────────────────────
@@ -229,7 +309,7 @@ _ask_fmt_age() { local s="$1"; if (( s < 3600 )); then echo "$((s/60))m"; elif (
 _ask_state_label() {  # <row> -> OPEN | STALE | WAITING-ON-<seat> | WAITING-ON-OWNER | DONE | WITHDRAWN
   local row="$1" st wo; st="$(_ask_field "$row" 8)"; wo="$(_ask_field "$row" 18)"
   case "$st" in
-    open) if [[ -n "$wo" ]]; then echo "WAITING-ON-${wo^^}"
+    open) if _ask_parked "$row"; then echo "WAITING-ON-${wo^^}"
           elif _ask_is_stale "$row"; then echo "STALE"
           else echo "OPEN"; fi ;;
     waiting_owner) echo "WAITING-ON-OWNER" ;;
@@ -284,7 +364,7 @@ ask_list() {
 ask_show() {
   local id="${1:-}"; [[ -n "$id" ]] || refused "usage: aimail ask show <id>"
   local row; row="$(_ask_row "$id")"; [[ -n "$row" ]] || refused "ask show: no such ask '$id'"
-  local names=(id asked_at owner ask next check rank state last_touch touched_by state_text evidence done_at done_output stale_mailed_at escalated_at asked_at_text waiting_on)
+  local names=(id asked_at owner ask next check rank state last_touch touched_by state_text evidence done_at done_output stale_mailed_at escalated_at asked_at_text waiting_on park_until park_trigger prompt_id)
   local i _out=""
   # ⛔ ONE WRITE FOR THE WHOLE RECORD, not one per field -- see ask_list's own
   #   note above for the exact SIGPIPE this avoids (`ask show <id> | grep -q
@@ -331,7 +411,15 @@ ask_role_block() {  # <seat> -> a markdown block of the seat's open rows (empty 
 }
 
 # ─── digest: rows --waiting-on someone, surfaced once instead of stale-mailed every sweep ──
-ask_digest() {  # [<who>] -> one line per open row with a non-empty waiting_on
+_ask_park_text() {  # <row> -> "until 2026-10-05 14:00" / "trigger: ..." / "no date or trigger (legacy park)"
+  local row="$1" u t out=""
+  u="$(_ask_field "$row" 19)"; t="$(_ask_field "$row" 20)"
+  [[ "$u" =~ ^[0-9]+$ ]] && (( u > 0 )) && out="until $(date -d "@$u" '+%F %H:%M')"
+  [[ -n "$t" ]] && out="${out:+$out; }trigger: $t"
+  printf '%s' "${out:-no date or trigger (legacy park)}"
+}
+
+ask_digest() {  # [<who>] -> one line per open PARKED row, with its date or trigger
   local who="${1:-}" row wo n=0
   _ask_ensure_file
   while IFS= read -r row; do
@@ -340,11 +428,52 @@ ask_digest() {  # [<who>] -> one line per open row with a non-empty waiting_on
     wo="$(_ask_field "$row" 18)"; [[ -n "$wo" ]] || continue
     [[ -n "$who" && "$wo" != "$who" ]] && continue
     n=$((n+1))
-    printf '%s  owed by %-10s  owner %-10s  %s (age %s)\n' \
+    printf '%s  owed by %-10s  owner %-10s  %s (age %s; %s)\n' \
       "$(_ask_field "$row" 1)" "$wo" "$(_ask_field "$row" 3)" \
-      "$(_ask_field "$row" 4)" "$(_ask_fmt_age "$(_ask_age "$row")")"
+      "$(_ask_field "$row" 4)" "$(_ask_fmt_age "$(_ask_age "$row")")" "$(_ask_park_text "$row")"
   done < <(_ask_rows | sort -t$'\t' -k7,7n -k2,2n)
   (( n )) || info "(no rows waiting on anyone$( [[ -n "$who" ]] && printf ' named %s' "$who" ))"
+  return 0
+}
+
+# ─── owner-digest (drop-prevention guard 4) ──────────────────────────────────────────────
+# ONE command that answers "what is still open, who has it, how old, what is the next step":
+# every open ask (open, parked, stale, waiting on the owner), oldest first within rank, then the
+# count of captured owner prompts that were never triaged (lib/prompts.sh). Read-only.
+ask_owner_digest() {
+  local owner="" row n=0 label
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --owner) owner="${2:-}"; shift 2 ;;
+      *) refused "ask owner-digest: unknown argument '$1'" ;;
+    esac
+  done
+  [[ -n "$owner" ]] && { owner="$(seat_resolve "$owner")" || exit $?; }
+  _ask_ensure_file
+  local _rec _all=""
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    local st; st="$(_ask_field "$row" 8)"
+    [[ "$st" == "open" || "$st" == "waiting_owner" ]] || continue
+    [[ -n "$owner" && "$(_ask_field "$row" 3)" != "$owner" ]] && continue
+    n=$((n+1)); label="$(_ask_state_label "$row")"
+    _rec="$(printf '%-6s %-18s seat %-10s age %-5s %s' "$(_ask_field "$row" 1)" "$label" "$(_ask_field "$row" 3)" \
+      "$(_ask_fmt_age "$(_ask_age "$row")")" "$(_ask_field "$row" 4)")"
+    _rec="${_rec}"$'\n'"$(printf '%-6s   next: %s' "" "$(_ask_field "$row" 5)")"
+    if [[ -n "$(_ask_field "$row" 18)" ]]; then
+      _rec="${_rec}"$'\n'"$(printf '%-6s   parked on %s: %s' "" "$(_ask_field "$row" 18)" "$(_ask_park_text "$row")")"
+    fi
+    _all="${_all}${_rec}"$'\n'
+  done < <(_ask_rows | sort -t$'\t' -k7,7n -k2,2n)
+  # ⛔ ONE WRITE for the whole digest (see ask_list's SIGPIPE note).
+  local pend=0
+  if declare -F prompt_untriaged_count >/dev/null 2>&1 || source "$(dirname "${BASH_SOURCE[0]}")/prompts.sh" 2>/dev/null; then
+    pend="$(prompt_untriaged_count)"
+  fi
+  _all="OPEN ASKS: $n$( [[ -n "$owner" ]] && printf ' (seat %s)' "$owner" )   UNTRIAGED OWNER PROMPTS: $pend"$'\n'"$_all"
+  (( n )) || _all="${_all}(no open asks)"$'\n'
+  (( pend )) && _all="${_all}untriaged prompts: aimail prompt list --untriaged   (each needs: aimail prompt triage <id> --ask <k####> | --no-ask \"<reason>\")"$'\n'
+  printf '%s' "$_all"
   return 0
 }
 
@@ -382,7 +511,8 @@ _ask_sweep_locked() {
     # yet passed but is blocked on someone's decision -- the check is still evaluated every
     # sweep (so a later pass still closes the row), but staleness/mail is suppressed exactly
     # like the false-check case, without touching the check field or the waiting_owner state.
-    if [[ -n "$(_ask_field "$row" 18)" ]]; then
+    # (an EXPIRED --until is not parked any more: it falls through to the stale branch below)
+    if _ask_parked "$row"; then
       waiting_n=$((waiting_n+1)); continue
     fi
     age="$(_ask_age "$row")"
@@ -429,9 +559,9 @@ _ask_import_locked() {
     check="$(printf '%s' "$check" | sed 's/[[:space:]]*$//')"
     epoch="$(date -d "$(date +%Y)-$(printf '%s' "$at" | sed 's/x/0/g')" +%s 2>/dev/null || echo "")"
     [[ -n "$epoch" ]] || epoch="$(now_epoch)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$id" "$epoch" "$owner" "$(_ask_clean "$ask")" "$(_ask_clean "$next")" "$(_ask_clean "$check")" 100 "open" \
-      0 "" "$(_ask_clean "${comment# }")" "" 0 "" 0 0 "$(_ask_clean "$at")" "" >> "$(ASK_FILE)"
+      0 "" "$(_ask_clean "${comment# }")" "" 0 "" 0 0 "$(_ask_clean "$at")" "" 0 "" "" >> "$(ASK_FILE)"
     added=$((added+1))
   done < "$src"
   info "ask import: $added added, $skipped already present"
@@ -464,10 +594,14 @@ ask_dispatch() {
     stale-for) [[ $# -ge 1 ]] || refused "usage: aimail ask stale-for <seat>"; ask_stale_for "$(seat_resolve "$1")" ;;
     counts)    [[ $# -ge 1 ]] || refused "usage: aimail ask counts <seat>"; ask_counts "$(seat_resolve "$1")" ;;
     digest)    ask_digest "${1:-}" ;;
-    *) refused "usage: aimail ask add|touch|list|show|sweep|withdraw|import|stale-for|counts|digest …" \
+    park)      ask_park "$@" ;;
+    owner-digest) ask_owner_digest "$@" ;;
+    *) refused "usage: aimail ask add|touch|park|list|show|sweep|withdraw|import|stale-for|counts|digest|owner-digest …" \
          "  add      --owner <seat> --quote \"<owner's words>\" --next \"<step>\" --check '<predicate>' [--rank N]" \
          "  touch    <id> --by <seat> --state \"<where it stands>\" [--evidence <ref>] [--next \"<step>\"]" \
-         "                                    [--waiting-on <who>|'']  (blocks stale mail; check still evaluated)" \
+         "                                    [--waiting-on <who> (--until <date> | --trigger \"<event>\") | '']" \
+         "  park     <id> --by <seat> --state \"<why>\" --waiting-on <who> (--until <date> | --trigger \"<event>\")" \
+         "  owner-digest [--owner <seat>]   every open ask: seat, age, state, park date/trigger, next step" \
          "  list     [--owner <seat>] [--stale] [--all]        show <id>" \
          "  sweep    (cron, every 10 min: runs each open row's check; closes on exit 0; mails stale rows)" \
          "  withdraw <id> --owner-approved \"<quote>\"          import [<seed.tsv>]" \

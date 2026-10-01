@@ -215,6 +215,45 @@ mail_send() {
     fi
   fi
 
+  # ─── §2.4d — a WORK mail must cite the ask it works on (drop-prevention guard 3) ─────────
+  # A mail that hands a seat work ("Task: …", "Assignment: …") with no ledger id is work the
+  # ledger cannot see: if the thread is crowded out nothing brings it back, and the owner's ask
+  # it came from has no pointer to it. So a send whose SUBJECT announces work is refused unless
+  # its subject or body cites a ledger id (k#### from `aimail ask add`, or an imported a##) that
+  # exists and is still open. Only the subject triggers the guard; mails that merely discuss work
+  # are untouched. AIMAIL_WORK_SUBJECT_RE names the work prefixes (extended regex, case-insensitive).
+  # Kill switch, a human's decision only: AIMAIL_WORK_MAIL_GUARD=0.
+  if [[ "${AIMAIL_WORK_MAIL_GUARD:-1}" != "0" ]] \
+     && grep -qiE "${AIMAIL_WORK_SUBJECT_RE:-^[[:space:]]*(new )?(task|assignment|assign|work request)[[:space:]]*[:—–-]}" <<<"$subject"; then
+    source "$(dirname "${BASH_SOURCE[0]}")/ask.sh"
+    local _cited _id _row _st _good="" _bad=""
+    _cited="$( { printf '%s\n' "$subject"; cat "$body"; } \
+      | grep -oE '(^|[^[:alnum:]])(k[0-9]{4}|a[0-9]{2,3})([^[:alnum:]]|$)' \
+      | grep -oE 'k[0-9]{4}|a[0-9]{2,3}' | sort -u )"
+    for _id in $_cited; do
+      _row="$(_ask_row "$_id")"
+      _st="$(_ask_field "$_row" 8)"
+      if [[ -n "$_row" && ( "$_st" == "open" || "$_st" == "waiting_owner" ) ]]; then _good="$_good $_id"
+      else _bad="$_bad $_id"; fi
+    done
+    if [[ -z "$_good" ]]; then
+      rm -f "$body"
+      if [[ -n "$_bad" ]]; then
+        refused "a work mail must cite an OPEN ask, and none of the ids it names is one:${_bad}." \
+          "An id that is not in the ledger, or whose ask is already done or withdrawn, gives the work no home." \
+          "  aimail ask list --all   (find the right id)   |   aimail ask add …   (open a new ask)" \
+          "Kill switch, a human's decision only: AIMAIL_WORK_MAIL_GUARD=0."
+      else
+        refused "a work mail (subject '${subject:0:50}…') must cite the ledger ask it works on." \
+          "Put the id (k####, or an imported a##) in the subject or the body:" \
+          "  aimail ask list          (find the ask this work belongs to)" \
+          "  aimail ask add --owner <seat> --quote \"<the owner's words>\" --next \"<step>\" --check '<predicate>'" \
+          "A send that assigns work without a ledger id is work the ledger cannot see or chase." \
+          "Kill switch, a human's decision only: AIMAIL_WORK_MAIL_GUARD=0."
+      fi
+    fi
+  fi
+
   # ─── One file per recipient (§2.4) ─────────────────────────────────────────
   # ⛔ A `cc:` line delivers NOTHING — it is text inside one recipient's file.
   #    122 messages were once sent with a cc: header and the intended readers

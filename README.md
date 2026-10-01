@@ -117,6 +117,40 @@ Six states where a process count had two: `ARMED`, `RE-ARMING`, `STALLED`,
 window in which a fired poller is still expected to re-arm — reporting that
 window as "down" is the most common false alarm in fleet supervision.
 
+## Drop-prevention guards (prompt ledger, parking, work mail, digest)
+
+Four mechanical guards so that something the owner asked for cannot quietly fall out of the
+fleet's attention. Each one is exercised by `tests/drop_guards.sh` (a refusal arm paired with an
+acceptance arm for every guard).
+
+1. **Prompt ledger + triage gate.** `hooks/prompt_guard.sh capture` (a UserPromptSubmit hook)
+   records every owner prompt as `untriaged` (machine text such as harness notifications and
+   poller wakes is skipped; `AIMAIL_AUTOMATED_PROMPT_RE` names it) and tells the session the
+   prompt id. `hooks/prompt_guard.sh gate` (a Stop hook) refuses to end the turn while that
+   session still has an untriaged prompt. Each ends in exactly one of
+   `aimail prompt triage <p####> --ask <k####>` (the ask must exist in the ledger) or
+   `--no-ask "<reason>"` (a real reason, 8+ characters); `aimail ask add … --prompt <p####>`
+   adds the ask and triages in one step. The gate blocks at most once per stop attempt
+   (`stop_hook_active`), fails open on any error, and a block leaves the prompt `untriaged`, so
+   it shows in the digest and blocks the next stop too. Wiring, in the project's
+   `.claude/settings.json`:
+   `hooks.UserPromptSubmit[].hooks[] = {"type":"command","command":"bash <aimail>/hooks/prompt_guard.sh capture"}` and
+   `hooks.Stop[].hooks[] = {"type":"command","command":"bash <aimail>/hooks/prompt_guard.sh gate"}`.
+   Kill switches (a human's decision): `AIMAIL_PROMPT_CAPTURE=0`, `AIMAIL_PROMPT_GATE=0`.
+2. **Parking needs a date or a named trigger.** `aimail ask touch|park <id> … --waiting-on <who>`
+   is refused unless it carries `--until <date>` (`YYYY-MM-DD`, `'YYYY-MM-DD HH:MM'`, `+3d`, `+12h`;
+   must be in the future) or `--trigger "<the named event that ends the park>"`. An expired
+   `--until` un-parks the row: it is listed STALE and the sweep mails it again. Clearing a park
+   (`--waiting-on ''`) needs neither. Parks written before this rule stay parked and are flagged
+   "no date or trigger (legacy park)" in the digest.
+3. **A work mail cites an ask.** `aimail send` refuses a mail whose subject announces work
+   (`Task:`, `Assignment:`, `Assign:`, `Work request:`; `AIMAIL_WORK_SUBJECT_RE`) unless the subject
+   or body cites a ledger id (`k####`, or an imported `a##`) that exists and is still open.
+   Kill switch (a human's decision): `AIMAIL_WORK_MAIL_GUARD=0`.
+4. **The open-asks digest.** `aimail ask owner-digest [--owner <seat>]` prints every open ask with
+   its seat, age, state, park date or trigger and next step, plus the number of owner prompts never
+   triaged.
+
 ## Migrating an existing mailbox
 
 ```bash

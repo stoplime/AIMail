@@ -111,7 +111,7 @@ section "ask ledger — --waiting-on: a REAL check blocked on someone, exempt fr
 #   was ALREADY exempt. --waiting-on gives a real-check row the same exemption without
 #   touching its check.
 ID5="$("$AIMAIL" ask add --owner alpha --quote "blocked on carol" --next "n" --check "test -f $T/w5.done" 2>/dev/null | tail -1)"
-"$AIMAIL" ask touch "$ID5" --by alpha --state "blocked" --waiting-on carol >/dev/null 2>&1
+"$AIMAIL" ask touch "$ID5" --by alpha --state "blocked" --waiting-on carol --until +1d >/dev/null 2>&1
 "$AIMAIL" ask show "$ID5" 2>/dev/null | _has "^waiting_on: *carol"; check $? "touch --waiting-on sets the column"
 "$AIMAIL" ask list --all 2>/dev/null | _has "^$ID5 *WAITING-ON-CAROL"; check $? "ask list labels it WAITING-ON-<seat>, not OPEN/STALE"
 _backdate "$ID5" 9 3   # past AIMAIL_ASK_STALE=2
@@ -136,7 +136,7 @@ touch "$T/w5.done"
 # ⛔ THE OTHER DIRECTION: clearing it must restore ordinary stale-mailing -- an
 #   always-exempting flag would just move the blind spot, not fix it.
 ID6="$("$AIMAIL" ask add --owner alpha --quote "will be unblocked" --next "n" --check "test -f $T/w6.done" 2>/dev/null | tail -1)"
-"$AIMAIL" ask touch "$ID6" --by alpha --state "blocked" --waiting-on carol >/dev/null 2>&1
+"$AIMAIL" ask touch "$ID6" --by alpha --state "blocked" --waiting-on carol --until +1d >/dev/null 2>&1
 "$AIMAIL" ask touch "$ID6" --by alpha --state "unblocked" --waiting-on "" >/dev/null 2>&1
 "$AIMAIL" ask show "$ID6" 2>/dev/null | _has "^waiting_on: *$"; check $? "--waiting-on '' clears the column"
 _backdate "$ID6" 9 3
@@ -149,7 +149,7 @@ touch "$T/w6.done"; "$AIMAIL" ask sweep >/dev/null 2>&1
 # ⭐ the digest: what a per-row stale mail was replaced with for the blocked case.
 "$AIMAIL" ask digest 2>/dev/null | _has "^$ID6"; rc=$?; [[ $rc != 0 ]]; check $? "digest never lists an unblocked row"
 ID7="$("$AIMAIL" ask add --owner beta --quote "also blocked on carol" --next "n" --check "false2" 2>/dev/null | tail -1)"
-"$AIMAIL" ask touch "$ID7" --by beta --state "blocked" --waiting-on carol >/dev/null 2>&1
+"$AIMAIL" ask touch "$ID7" --by beta --state "blocked" --waiting-on carol --until +1d >/dev/null 2>&1
 "$AIMAIL" ask digest 2>/dev/null | _has "^$ID7.*owed by carol"; check $? "digest lists a blocked row with who it's owed by"
 "$AIMAIL" ask digest nobodyhome 2>/dev/null | _has "^$ID7"; rc=$?; [[ $rc != 0 ]]; check $? "digest <who> filters to that one name only"
 "$AIMAIL" ask digest carol 2>/dev/null | _has "^$ID7"; check $? "…and finds it under the matching name"

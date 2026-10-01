@@ -134,7 +134,7 @@ FLEET — who is working, who is reachable, who needs a human
                                              decision.
 
   aimail ask add --owner <seat> --quote "<owner's words>" --next "<step>"
-                 --check '<shell predicate>' [--rank N]
+                 --check '<shell predicate>' [--rank N] [--prompt <p####>]
                                              open an ASK: a task the owner asked for that is
                                              never silently dropped. `--check` decides when
                                              it closes on its own (ask sweep, cron every 10
@@ -142,7 +142,8 @@ FLEET — who is working, who is reachable, who needs a human
                                              the owner's verdict (WAITING-ON-OWNER, never
                                              stale-escalated). There is no `ask done`.
   aimail ask touch <id> --by <seat> --state "<where it stands>"
-                 [--evidence <ref>] [--next "<step>"] [--waiting-on <who>|'']
+                 [--evidence <ref>] [--next "<step>"]
+                 [--waiting-on <who> (--until <date> | --trigger "<event>") | '']
                                              a CURRENT-STATE snapshot; also ends the row's
                                              stale episode (one stale mail per episode).
                                              --waiting-on <who> exempts a REAL (non-`false`)
@@ -151,6 +152,16 @@ FLEET — who is working, who is reachable, who needs a human
                                              auto-closes the moment its check passes; who is
                                              free text (very often a human, never registered
                                              as a seat). --waiting-on '' clears it.
+                                             ⛔ A PARK NEEDS AN END: --waiting-on without
+                                             --until <date> (YYYY-MM-DD, 'YYYY-MM-DD HH:MM',
+                                             +3d, +12h) or --trigger "<named event>" is
+                                             refused; an expired --until un-parks the row
+                                             (it goes STALE and is escalated again).
+  aimail ask park <id> --by <seat> --state "<why>" --waiting-on <who>
+                 (--until <date> | --trigger "<event>")   the explicit verb for that touch
+  aimail ask owner-digest [--owner <seat>]  ONE screen: every open ask with its seat, age,
+                                             state, park date/trigger and next step, plus the
+                                             count of owner prompts never triaged.
   aimail ask list [--owner <seat>] [--stale] [--all]   ask show <id>
   aimail ask digest [<who>]                 every row blocked --waiting-on someone, one line
                                              each -- the "what's still owed" view a stale
@@ -163,6 +174,14 @@ FLEET — who is working, who is reachable, who needs a human
   aimail ask import [<seed.tsv>]            seed rows (ids preserved, existing ids skipped)
   aimail ask stale-for <seat> | counts <seat>   internal readers (the gate, the fleet,
                                              the handover, the boot check)
+
+  aimail prompt capture|triage|list|count   the PROMPT LEDGER: the hooks in hooks/prompt_guard.sh
+                                             record every owner prompt as untriaged and refuse to
+                                             end the turn until each is `prompt triage <p####>
+                                             --ask <k####>` or `--no-ask "<reason>"` (README).
+  aimail send … a WORK mail (subject "Task: …"/"Assignment: …") must cite a ledger id
+                                             (k#### / a##) that exists and is open, in its subject
+                                             or body; kill switch AIMAIL_WORK_MAIL_GUARD=0.
 
 ⚠ THE CLAIM GATE REFUSES A STALE OWNER. `gateclaim.sh <key> <seat> …` refuses
   a new claim by a seat that owns a stale open ask, naming the row — this is
@@ -438,6 +457,9 @@ case "$cmd" in
   ask)
     source "$_SELF/../lib/ask.sh"
     ask_dispatch "$@" ;;
+  prompt)
+    source "$_SELF/../lib/prompts.sh"
+    prompt_dispatch "$@" ;;
 
   # ⚠ THE ONE WAY TO MOVE A SHARED REF (lib/land.sh) — see its own header for
   #   the race this replaces. Never materializes a working tree.
