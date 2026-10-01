@@ -27,15 +27,15 @@ chk "the start part was found in the wrapper" "$(grep -c FLEET_RUNNER= "$START")
 chk "the collect part was found in the wrapper" "$(grep -c 'wait "\$FLEET_PID"' "$COLLECT")" "1"
 chk "the runner is called with --jobs 4" "$(grep -c -- '--fast --jobs 4' "$START")" "1"
 
-run_step() {  # $1 = hub directory holding zignore/fleet_tests
-  ( PLATFORM_ROOT="$1" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere
+run_step() {  # $1 = workspace directory holding fleet_tests
+  ( PLATFORM_ROOT="$1/platform" FLEET_WORKSPACE="$1" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere
     ENV_ASSIGNMENTS=(X=1)
     source "$START"
     source "$COLLECT"
     echo "EXIT=$FLEET_TESTS_EXIT DESC=$FLEET_TESTS_DESC" )
 }
 mkhub() {  # $1 = name, $2 = the runner's body
-  mkdir -p "$TMP/$1/zignore/fleet_tests"; printf '%s\n' "$2" > "$TMP/$1/zignore/fleet_tests/run_fleet_tests.py"; }
+  mkdir -p "$TMP/$1/fleet_tests"; printf '%s\n' "$2" > "$TMP/$1/fleet_tests/run_fleet_tests.py"; }
 
 echo "── ARM 1: a runner that ran tests and passed -- must give 0 (positive control) ──"
 mkhub pass 'echo "Ran 5 tests in 0.1s"; exit 0'
@@ -63,12 +63,12 @@ chk "the skip says it did not run" "$(echo "$out" | grep -c 'not run')" "1"
 
 echo "── ARM 4b: the runner runs ALONGSIDE the caller's work, not after it ──"
 mkhub slow 'sleep 3; echo "Ran 5 tests in 3s"; exit 0'
-elapsed=$( PLATFORM_ROOT="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
+elapsed=$( PLATFORM_ROOT="$TMP/slow/platform" FLEET_WORKSPACE="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
            s0=$(date +%s.%N); source "$START"; s1=$(date +%s.%N)
            echo "$s1 - $s0" | bc )
 chk "starting the runner returns at once (well under its 3 s)" "$(echo "$elapsed < 1" | bc)" "1"
 t0=$(date +%s)
-out=$( PLATFORM_ROOT="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
+out=$( PLATFORM_ROOT="$TMP/slow/platform" FLEET_WORKSPACE="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
        source "$START"; sleep 2; source "$COLLECT"; echo "EXIT=$FLEET_TESTS_EXIT" )
 t1=$(date +%s)
 chk "start, 2 s of other work, collect: the runner's 3 s overlapped the work (total under 4 s)" "$([ $((t1 - t0)) -lt 4 ] && echo yes || echo no)" "yes"
