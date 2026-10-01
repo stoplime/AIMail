@@ -22,7 +22,7 @@ POLLER_DRAIN_MAXB="${POLLER_DRAIN_MAXB:-60000}"
 # If this deployment's actual Stop hook is NOT hooks/stop_guard.sh (e.g. it was
 # forked/renamed and wired into settings.json under a different filename),
 # point `whoami` at that hook's own session->seat state dir so its
-# registrations aren't invisible here too (AR-26). Expects seat_<sid> files.
+# registrations aren't invisible here too. Expects seat_<sid> files.
 # AIMAIL_EXTERNAL_SEAT_DIR="/path/to/that/hook/state/dir"
 
 # ─── run_canonical_battery.sh (bin/run_canonical_battery.sh) ──────────────────
@@ -78,7 +78,7 @@ POLLER_DRAIN_MAXB="${POLLER_DRAIN_MAXB:-60000}"
 AIMAIL_CAP_DEFAULT="${AIMAIL_CAP_DEFAULT:-90}"
 # AIMAIL_CAP_shared=80
 
-# ─── Landing-guard resolvability check (t908, 2026-09-22) ──────────────────────
+# ─── Landing-guard resolvability check ──────────────────────
 # Repos whose main-only landing guard (hooks/main_only_landing_guard.sh, installed as a
 # `reference-transaction` hook) `aimail session` / `aimail doctor` / `aimail landing-guard`
 # verify is INSTALLED AND RESOLVABLE — a dangling symlink or a core.hooksPath into a
@@ -86,7 +86,7 @@ AIMAIL_CAP_DEFAULT="${AIMAIL_CAP_DEFAULT:-90}"
 # unset: $POC_ROOT and $PLATFORM_ROOT above; failing both, the repo containing $PWD.
 # AIMAIL_LANDING_GUARD_REPOS="${AIMAIL_LANDING_GUARD_REPOS:-$POC_ROOT $PLATFORM_ROOT}"
 
-# ─── Landing-guard per-repo, per-ref allow-list (second-code-lander policy, 2026-09-22) ──
+# ─── Landing-guard per-repo, per-ref allow-list (extra-lander policy) ──
 # hooks/main_only_landing_guard.sh refuses a protected-ref update from any seat not on
 # that ref's own allow-list -- seat "main" is always allowed, everywhere, unconditionally;
 # this only ever ADDS extra landers on top of that. One "<repo-abs-path>|<ref>|<space-
@@ -101,15 +101,15 @@ AIMAIL_CAP_DEFAULT="${AIMAIL_CAP_DEFAULT:-90}"
 #   "/path/to/your/platform-repo|refs/heads/your-landing-branch|audit"
 # )
 
-# ─── Supervisor liveness guard (the owner 2026-09-22, top budget item) ────────────────────────────
+# ─── Supervisor liveness guard ────────────────────────────
 # `aimail fleet watchdog` (cron, every 5 min) checks the supervisor seat after each ramp and wakes
 # or resumes it from the session registry; when that fails it escalates to the vice orchestrator
 # and to a human seat if one is set, and writes state/ALERT_supervisor_unreachable, which every
 # dashboard prints first. The hard stop itself needs no knob: the poller honours an unpark
 # exemption only below AIMAIL_SEAT_CAP_<seat> (assistant: 95).
 # AIMAIL_VICE_SUPERVISOR="${AIMAIL_VICE_SUPERVISOR:-main}"
-# AIMAIL_PINNED_SEATS="assistant main"   # LOCKED to their account (the owner 2026-09-22 17:28); `seat migrate` refuses without --owner-approved
-# AIMAIL_HUMAN_ALERT_SEAT=""            # unset today: the owner's own seat is retired -- set one to reach a human
+# AIMAIL_PINNED_SEATS="assistant main"   # LOCKED to their account; `seat migrate` refuses without --owner-approved
+# AIMAIL_HUMAN_ALERT_SEAT=""            # unset by default -- set one to reach a human
 # AIMAIL_SUPERVISOR_WAKE_RETRIES="${AIMAIL_SUPERVISOR_WAKE_RETRIES:-3}"
 
 # ─── Sterility guard ─────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ AIMAIL_CAP_DEFAULT="${AIMAIL_CAP_DEFAULT:-90}"
 # Verdicts are cached on the backlog file's mtime+size ($STATE_DIR/backlog_classify.cache).
 # AIMAIL_TODO_ARCHIVE_TOOL=/path/to/your/backlog_classifier.py
 # AIMAIL_TODO_CLASSIFY_TIMEOUT_SEC=30
-# AIMAIL_PINNED_SEATS="assistant main"   # LOCKED to their account (the owner 2026-09-22 17:28); `seat migrate` refuses without --owner-approved
+# AIMAIL_PINNED_SEATS="assistant main"   # LOCKED to their account; `seat migrate` refuses without --owner-approved
 
 # ─── Account pool (_configured_account_pool, lib/budget.sh) ─────────────────────────────────
 # The explicit, space-separated set of accounts this fleet actually manages, by name
@@ -142,29 +142,29 @@ AIMAIL_CAP_DEFAULT="${AIMAIL_CAP_DEFAULT:-90}"
 #   $HOME/.claude can be a symlink ALIAS to one of the $HOME/.claude-<name> dirs (the same
 #   account under two names, which reads as a TWIN and breaks `seat migrate`), and a glob has no
 #   way to tell a genuine fleet account from any other, unrelated Claude account dir that
-#   happens to exist on the same machine (found live, 2026-09-25: both defects at once).
+#   happens to exist on the same machine (both defects have been seen live).
 # AIMAIL_ACCOUNT_POOL="work research r2"    # preferred name for this purpose; wins if both are set
 # AIMAIL_FLEET_ACCOUNTS="work research r2"  # same shape, older name, still honoured
 
-# ─── Placement rules (T-917, lib/placement.sh) ───────────────────────────────────────────────
+# ─── Placement rules (lib/placement.sh) ───────────────────────────────────────────────
 # `aimail placement [seat]`, `seat migrate` (refuses a rule-breaking move), the balancer's target,
 # and the budget/fleet dashboards all read these. Defaults are right for this fleet.
 # AIMAIL_PRECIOUS_ACCOUNT=""      # the supervisor's account; default: the supervisor's seat record (work)
 # AIMAIL_FABLE_SEAT="fable"       # placed by its OWN model's weekly headroom (the probe's fable-model weekly)
 # AIMAIL_PLACEMENT_SEATS=""       # TEST SEAM only: "acct:seat,seat acct2:seat" overrides the live seat->account map
-# AIMAIL_HUMAN_ALERT_SEAT=""            # unset today: the owner's own seat is retired -- set one to reach a human
+# AIMAIL_HUMAN_ALERT_SEAT=""            # unset by default -- set one to reach a human
 # AIMAIL_SUPERVISOR_WAKE_RETRIES="${AIMAIL_SUPERVISOR_WAKE_RETRIES:-3}"
 
-# ── T-917 item 3: crossing warnings (lib/warnings.sh) ─────────────────────────
+# ── crossing warnings (lib/warnings.sh) ─────────────────────────
 # AIMAIL_WARN_LEVELS="50 80"   the % levels that mail once per (account, gauge, level, window)
 # AIMAIL_WARNINGS=1            0 disables the warnings tick inside `budget autopilot`
 
-# ── T-917 item 4: the balancer acts (lib/act.sh) ─────────────────────────────
+# ── the balancer acts (lib/act.sh) ─────────────────────────────
 # AIMAIL_BALANCE_ACT=0             1 = announce-then-do: one seat per autopilot tick, never mid-turn
 # AIMAIL_BALANCE_ACT_LEVEL=80      block % that triggers a move (an over-fair-share account also does)
 # AIMAIL_BALANCE_ACT_DELAY_MIN=10  minutes between the announcement mail and the move
 
-# ── the ask ledger (lib/ask.sh) — a task the owner asked for is never silently dropped ────────
+# ── the ask ledger (lib/ask.sh) — a task a person asked for is never silently dropped ────────
 # AIMAIL_ASK_STALE=1800            seconds untouched before an open row is STALE (one mail per
 #                                   episode to its owner + the supervisor; a touch ends the episode)
 # AIMAIL_ASK_CHECK_TIMEOUT=30      seconds before a row's --check predicate is killed (not done)

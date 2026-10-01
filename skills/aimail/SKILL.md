@@ -7,10 +7,10 @@ description: Reference for the aimail fleet-mail CLI (poll, ack, send, fleet, bu
 
 This is the canonical, version-controlled reference for `aimail` and its companion
 `gateclaim.sh`, installed as a personal skill (symlinked from every account
-directory into `/mnt/workdrive/AI/AIMail/skills/aimail/`) so it survives an
+directory into `skills/aimail/` in the aimail repo) so it survives an
 account switch and never needs re-deriving from memory. **When unsure of exact
 syntax, read this file — do not guess or invent a flag.** The full design
-rationale lives in `/mnt/workdrive/AI/AIMail/README.md`; this file is the
+rationale lives in `README.md` in the aimail repo; this file is the
 quick-reference command surface plus the rules that caused real incidents when
 violated.
 
@@ -22,7 +22,7 @@ violated.
   `<config-dir>/jobs/<short-id>/state.json`, key `respawnFlags`). A killed
   process reads as a crash and is RESPAWNED from that spec — original account,
   original model — minutes after any hand relaunch, so the seat ends up running
-  TWICE under one session id on two accounts (real incident, 2026-09-21).
+  TWICE under one session id on two accounts (a real incident).
   `claude stop <short-id>` deregisters the job cleanly. The one procedure is
   `aimail seat migrate <seat> <account>` (locate → handover → stop, verified
   gone → relaunch with an explicit model → settle → re-verify present on the
@@ -33,18 +33,18 @@ violated.
   every seat runs `aimail seat confirm <seat> --model <id>` (§ Starting a
   session, step 3b) so a fully dead seat can still be relaunched onto the
   right account from the persisted record.
-  **Since 2026-09-22 (the owner's rule) `seat migrate` RESUMES by default**: it
+  **`seat migrate` RESUMES by default**: it
   picks the seat's own previous session on the target from the per-account
   session registry (`aimail seat sessions [seat]`, auto-updated by every
   `seat confirm`/migrate), or carries the current session's transcript
   (`projects/<cwd-slug>/<sid>.jsonl` + its `<sid>/` dir) into the target's
   config dir first -- the missing transcript is what "source session not
-  found" meant on every failed move that day. A FRESH session is never a
+  found" meant on every failed move before this rule. A FRESH session is never a
   fallback: only `--fresh --why "<reason>"`, reserved for a seat that will not
   follow the orchestrator and is blocking the fleet; the path taken is recorded.
   `aimail seat set-session <seat> <acct> <sid> --why` / `reset-session` adjust
   the registry, every change logged with who and why.
-- **The supervisor never dies at the hard limit (the owner, 2026-09-22).** Three
+- **The supervisor never dies at the hard limit .** Three
   mechanisms, none of which depend on the supervisor's own session: (1) an
   unpark exemption is honoured only BELOW the seat's own cap
   (`AIMAIL_SEAT_CAP_<seat>`, assistant 95) -- at or above it the exempt poller
@@ -60,8 +60,7 @@ violated.
   are PINNED to the work account: `seat migrate` refuses either without
   `--owner-approved "<their words>"`, which is logged. Budget balance is fable's
   (balancer + warnings) and librarian's (ledger) -- not main's.
-- **Placement rules (T-917, `lib/placement.sh`, after the 2026-09-22 16:55 park
-  with six of nine seats on one account).** Pinned seats never move; the
+- **Placement rules (`lib/placement.sh`, added after a park left six of nine seats on one account).** Pinned seats never move; the
   supervisor's account is the most precious and takes a non-pinned seat only
   when no other account has headroom; fable is placed by its own model's
   weekly headroom; no account carries more than ceil(non-pinned seats /
@@ -74,7 +73,7 @@ violated.
   real work.** One command checks budget mode, role-handover freshness,
   poller state, `stop_guard.sh` registration, AND any project-local Stop-hook
   fork's SEPARATE registration — the exact thing that went silently wrong for
-  hours on 2026-09-03 (see "Starting a session," step 0, for the full
+  hours (see "Starting a session," step 0, for the full
   incident). It replaces walking five separate checks by hand and remembering
   that a second, easy-to-forget registration exists at all.
 - **A poller is a standalone background task, never chained.** Run
@@ -106,14 +105,14 @@ violated.
   requesting a gate. This applies to any backlog/priority item more than one
   free seat might reach for, not only gates — mail-announced claiming has a
   race window shorter than mail's own latency and has caused real collisions.
-  Key by the bare ticket ID when one exists (`t-437`, not `t437-xxyy-marks`) —
+  Key by the bare ticket ID when one exists (`t-123`, not `t123-xxyy-marks`) —
   gateclaim canonicalizes ticket-shaped keys itself, but a free-form key with
   no ticket number is only protected by containment, and free-form keys under
   8 characters aren't protected at all.
 - **Always claim with `--desc "why this claim was taken"`** (e.g.
-  `gateclaim.sh <key> <seat> --desc "verifying T-437 item 3"`), not a bare
+  `gateclaim.sh <key> <seat> --desc "verifying T-123 item 3"`), not a bare
   2-arg acquire. This is what makes `--list` a live "who's doing what" board
-  for the whole fleet — the project owner, 2026-08-20, standing practice going forward,
+  for the whole fleet — standing practice,
   not opt-in. The description is "why," stable for the claim's whole
   lifetime — never "what step I'm on right now," which drifts and goes stale.
   Staleness is judged off the claim's own timestamp, same as always; the
@@ -121,8 +120,7 @@ violated.
 - **`AIMAIL_ACK_TTL`-aware `--all` requires a matching, recent `deliver`** —
   add `--force` only when acking something outside that window (e.g. recovering
   after a stall), and only after actually reading it first.
-- **`ack --all` also requires `--sha <prefix>[,<prefix>...]`** (AR-28,
-  2026-09-03) naming an 8+ hex-char prefix of every target's own
+- **`ack --all` also requires `--sha <prefix>[,<prefix>...]`** naming an 8+ hex-char prefix of every target's own
   `body-sha256` header, one prefix per message being archived — get them from
   the poll/deliver output you just read, not invented. This exists because the
   TTL/receipt check above only proves a delivery just happened, not that
@@ -131,7 +129,7 @@ violated.
   happening fleet-wide. `--force` bypasses this too, same as it bypasses the
   receipt check — a deliberate, nameable unread sweep, never the default.
 - **A cap percentage on `budget status` is not a decision point for you, in
-  either direction.** Real incident, 2026-09-03: assistant read weekly at
+  either direction.** Real incident: the supervisor read weekly at
   85%/95% as "close to the reset" and told the whole fleet to wind down for
   the night to "conserve" the remainder — backwards, since weekly usage does
   not bank across the reset; idling before it just wastes the headroom
@@ -143,9 +141,9 @@ violated.
   percentage makes you want to change pace, don't — `budget status` now
   prints this same rule inline for exactly this reason.
 
-**Crossing warnings (T-917 item 3).** `aimail budget warnings [--dry-run]` prints, per account, the block / weekly / Fable-model gauges against the 50 and 80 levels (`AIMAIL_WARN_LEVELS`) plus a PROJECTED line when the current burn reaches the block cap before the block resets. `budget autopilot` runs it once per tick; each (account, gauge, level, window) mails the supervisor and the human seat ONCE, with the placement report in the body. Markers live under `state/warnings/`.
+**Crossing warnings.** `aimail budget warnings [--dry-run]` prints, per account, the block / weekly / Fable-model gauges against the 50 and 80 levels (`AIMAIL_WARN_LEVELS`) plus a PROJECTED line when the current burn reaches the block cap before the block resets. `budget autopilot` runs it once per tick; each (account, gauge, level, window) mails the supervisor and the human seat ONCE, with the placement report in the body. Markers live under `state/warnings/`.
 
-**The balancer acts (T-917 item 4).** With `AIMAIL_BALANCE_ACT=1`, each autopilot tick may ANNOUNCE one move (an account at/over `AIMAIL_BALANCE_ACT_LEVEL`, default 80, or over its fair share; the candidate is an idle non-pinned seat whose placement target passes `placement_check_move`) and, on the first tick after `AIMAIL_BALANCE_ACT_DELAY_MIN` (default 10), EXECUTES it through the resume-by-default `seat migrate` if the seat is still idle and placement still agrees. `aimail budget act` shows the pending intent; `aimail budget act cancel --why "<reason>"` stops it. A pinned seat is never a candidate; a mid-turn seat defers the move; every step is in `state/balance/acts.log`.
+**The balancer acts.** With `AIMAIL_BALANCE_ACT=1`, each autopilot tick may ANNOUNCE one move (an account at/over `AIMAIL_BALANCE_ACT_LEVEL`, default 80, or over its fair share; the candidate is an idle non-pinned seat whose placement target passes `placement_check_move`) and, on the first tick after `AIMAIL_BALANCE_ACT_DELAY_MIN` (default 10), EXECUTES it through the resume-by-default `seat migrate` if the seat is still idle and placement still agrees. `aimail budget act` shows the pending intent; `aimail budget act cancel --why "<reason>"` stops it. A pinned seat is never a candidate; a mid-turn seat defers the move; every step is in `state/balance/acts.log`.
 
 ## Starting (or resuming) a session — do these in order
 
@@ -158,7 +156,7 @@ up after an account switch — starts with this sequence, before any real work:
    AND any project-local Stop-hook fork's SEPARATE registration (step 5) —
    and prints the exact fix command for anything wrong, inline, rather than
    requiring you to know which of five places to look.
-   ⛔ **WHY THIS COMMAND EXISTS AT ALL (2026-09-03, live incident)**: an
+   ⛔ **WHY THIS COMMAND EXISTS AT ALL (a live incident)**: an
    architect session ran across a full block-boundary stall, ended its turn
    dozens of times over many hours, and a project's `poller_guard.sh` Stop
    hook fired on every single one — and returned `allow-unregistered` every
@@ -184,7 +182,7 @@ up after an account switch — starts with this sequence, before any real work:
    `aimail budget status` — read the cap %, whether the last reading is fresh
    or stale, and whether the fleet is currently parked. Also explicitly check
    `aimail budget account` for which day/night mode is active: **an incident
-   on 2026-08-24 had the fleet stuck in night mode (80% cap) during the day
+   once had the fleet stuck in night mode (80% cap) during the day
    because nobody re-checked the mode after a switch — usage read 86%, over
    the 80% cap, and the alarm should have read as fine at a 90% day cap.**
    Don't infer the mode from the cap number alone; call `aimail budget day`
@@ -216,7 +214,7 @@ up after an account switch — starts with this sequence, before any real work:
    has no fallback path; it hardcodes `stop_guard.sh`'s own event log). A
    project-local fork of the stop-guard concept (e.g. a `poller_guard.sh`
    installed under that project's own `.claude/hooks/`, per step 5 below) does
-   **not** feed this column — confirmed 2026-08-24 on a project where only the
+   **not** feed this column — confirmed on a project where only the
    local fork was wired, and LAST-STOP read "never" for every seat until
    `stop_guard.sh`'s own hook was additively wired into that project's
    `settings.json` alongside it. Registration is per
@@ -235,7 +233,7 @@ up after an account switch — starts with this sequence, before any real work:
    the exact same free pass, indistinguishable from one that's genuinely
    exempt. Nothing warns you this happened; every hook firing looks
    identical to a healthy one until you read its own log.
-   ⛔ **CONFIRMED LIVE 2026-09-03**: an architect session ran for hours
+   ⛔ **CONFIRMED LIVE**: an architect session ran for hours
    across a full block-boundary stall, ended its turn dozens of times, and
    the hook fired every single time and returned `allow-unregistered` every
    single time — because step 4's `stop_guard.sh register` was done, but the
@@ -305,7 +303,7 @@ a path here; write the body to a scratch file first if composing it inline.
 
 ```
 aimail poll-persistent <seat>   arm the wake loop — run it as a Monitor task (30-min cap; re-arm at each expiry)
-aimail poll <seat>       DEPRECATED (2026-09-21): the classic exit-on-delivery mode; still works, prints a warning
+aimail poll <seat>       DEPRECATED: the classic exit-on-delivery mode; still works, prints a warning
 aimail deliver <seat>    deliver once, no loop (for testing)
 ```
 A message's full body prints exactly once, ever. Still un-acked later, it
@@ -397,10 +395,10 @@ ticket-shaped keys; a free-form or SHA key ignores it.
 
 ⚠ **A claim is a WORK-ITEM lock, not a FILE lock.** Editing a shared file
 (TODO.md, a shared checkout's own tracked files) needs its own `todoedit`
-claim — a `t602:impl` work claim does not also protect a write to TODO.md;
+claim — a `t200:impl` work claim does not also protect a write to TODO.md;
 they are two different doors, even on the same ticket. A seat that believes
 its work claim covers a file edit has caused real, uncommitted-work-lost
-incidents (2026-08-31). **Hold `todoedit` for the WHOLE edit-through-commit
+incidents. **Hold `todoedit` for the WHOLE edit-through-commit
 cycle**, not just around the commit moment — release it only once the edit
 is actually committed (or hand off explicitly, naming who commits, in mail).
 A release with the edit still sitting uncommitted is the exposure window
@@ -434,8 +432,7 @@ refusal.
 
 ## Never chain a destructive worktree op with its own replacement — WIP-commit first
 
-**Standing rule (3 real incidents, 2026-08-31/09-01, three different mechanisms — foundation's
-TODO sync-clobber, audit's `T-602 worktree remove --force`, audit's `W2/O3` worktree move):
+**Standing rule (three real incidents, three different mechanisms: a sync that clobbered a shared file, a forced worktree removal, a worktree move):
 WIP-commit before any `git worktree remove`/move/prune touching content that might not be
 committed.** `git add -A && git commit -m WIP` costs nothing, survives any subsequent
 `--force`, and makes the loss class structurally impossible — there's nothing left to lose once
@@ -454,8 +451,7 @@ show it happened until someone goes looking for the thing that's now gone. Run t
 step, verify its result, then run the replacement as its own separate, verified call.
 
 **Design-proposal documents under `docs/` are committed at write time — never left
-untracked.** Real incident, 2026-09-01: a T-602 §3c redesign proposal, written to `docs/` and
-cited repeatedly in TODO.md, was confirmed gone from disk with zero git history anywhere (no
+untracked.** Real incident: a redesign proposal, written to `docs/` and cited repeatedly in the backlog, was confirmed gone from disk with zero git history anywhere (no
 commit, no stash, no worktree, no session scratchpad had it) by the time anyone went looking —
 the fourth destroyed-uncommitted-work instance in two days, and the first to take a design
 record rather than working code. `docs/` is a tracked path; an untracked file there is exactly
@@ -466,10 +462,9 @@ proposal doc a load-bearing artifact, and it needs the durability of one from th
 exists.
 
 **A documented norm is not enforcement — the lock-through-commit rule above is now a
-MECHANISM, not just words.** Fable, 2026-09-01/02: the lock-through-commit norm (hold a
+MECHANISM, not just words.** The lock-through-commit norm (hold a
 shared-file claim, e.g. `todoedit`, until the edit actually commits, not until the raw write
-succeeds) was written into SKILL.md at 11:13 and violated at 19:46 by a seat that helped write
-it — the 5th destroyed-uncommitted-work loss in two days. `gateclaim.sh --release` now REFUSES
+succeeds) was written into this skill and violated hours later by a seat that helped write it — the 5th destroyed-uncommitted-work loss in two days. `gateclaim.sh --release` now REFUSES
 when `AIMAIL_GUARDED_RELEASE_<CANONICAL_KEY>` (set in `etc/aimail.conf`, e.g.
 `AIMAIL_GUARDED_RELEASE_TODOEDIT=/path/to/TODO.md`) names a path that is dirty in the live
 checkout — `--handoff <seat>` bypasses it explicitly rather than silently. `todoedit` is
@@ -482,8 +477,8 @@ tool exists to replace (see its own header for the distinction spelled out).
 
 ## Read a ticket's own LATEST ruling before acting on a relayed clearance
 
-**Real incident, 2026-09-01: T-602 landed on `main` against a standing NOT-LICENSED ruling
-that was already recorded in the same TODO.md entry, ~90 lines below the "clear to land" line
+**Real incident: a ticket landed on `main` against a standing NOT-LICENSED ruling
+that was already recorded in the same backlog entry, ~90 lines below the "clear to land" line
 that got cited.** A ticket entry accumulates rulings over its life; a later one can supersede
 or outright refute an earlier one written in the same entry. Reading only as far as the first
 clearance-shaped sentence and stopping there — even when it's attributed to a named ruling,
@@ -495,7 +490,7 @@ beats an earlier one on the same ticket the same way a fresh probe beats a stale
 budget, or `HEAD` beats a cached ref — recency inside the SAME document is not optional to
 check just because the document already looks authoritative.
 
-**Two mechanics that make this cheap (fable, 2026-09-01):**
+**Two mechanics that make this cheap:**
 1. **Grep the entry for every dated `RULED`/`SEALED`/`HOLD` line and sort by TIMESTAMP, not
    file position.** A ticket's blocks get appended in more than one place as work continues
    across sessions/days — the physically-last block in the file is not guaranteed to be the
@@ -511,7 +506,7 @@ sentence you're citing.
 
 ## A claimed write carries a checkable pointer — verify against the artifact, never the mail
 
-**Real pattern, 2026-09-01: the shared checkout's real state diverged from seats' beliefs
+**Real pattern: the shared checkout's real state diverged from seats' beliefs
 about it at least eight times in two days** (five uncommitted-work losses, plus three separate
 instances the same night of "I wrote X" not matching reality — twice a reader checked the
 wrong location in a shared file, once a claimed TODO.md edit never actually reached a commit).
@@ -556,6 +551,6 @@ aimail version          the running instrument's identity and AIMAIL_ROOT
 
 For the "why" behind any of the above — the specific incidents that shaped
 each rule, the block-boundary-vs-percentage design, the gateclaim canonicalization
-algorithm and its stated limits — read `/mnt/workdrive/AI/AIMail/README.md` and
+algorithm and its stated limits — read `README.md` in the aimail repo and
 the `lib/*.sh` source directly. Those files, not this summary, are the
 source of truth if the two ever disagree; update this file when they do.
