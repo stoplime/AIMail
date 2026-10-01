@@ -292,7 +292,7 @@ STATUS
   aimail landing-guard [repo ...]           is the main-only landing guard installed + resolvable? (--selftest)
   aimail push-guard [repo ...]              is the pre-push sterility guard installed + resolvable? (--selftest)
   aimail commit-msg-guard [repo ...]        is the commit-msg sterility guard installed + resolvable? (--selftest)
-  aimail budget placement [seat]            T-917 placement rules: the per-account report, or the eligible accounts for <seat>, best first
+  aimail budget placement [seat]            placement rules: the per-account report, or the eligible accounts for <seat>, best first
   aimail fleet supervisor-check | supervisor-ack   one supervisor liveness/wake tick (cron runs it inside fleet watchdog) | clear the alert
   aimail fleet budget-move <seat> [--act] [--target <acct>] [--sid <id>] [--from <seat>] [--force]   weekly-cap move of ONE seat: resume its prior session on the account with headroom, model pinned (the supervisor keeps its old session alive)
   aimail fleet supervisor-handover [--act] [--target <acct>] [--sid <id>] [--force]   budget handover of the supervisor seat: resume its prior session on the account with headroom, old kept alive off aimail
@@ -550,7 +550,7 @@ case "$cmd" in
 
   status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
   # landing-guard [repo ...] — one line per repo: is hooks/main_only_landing_guard.sh
-  #   installed AND resolvable there (t908: a dangling hooksPath/symlink runs no hooks,
+  #   installed AND resolvable there (a dangling hooksPath/symlink runs no hooks,
   #   silently). Also a section of `session` and `doctor`; --selftest drives real git.
   landing-guard)
     source "$_SELF/../lib/landingguard.sh"

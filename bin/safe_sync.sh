@@ -11,7 +11,7 @@
 # working copy already has uncommitted changes to that path — it silently
 # overwrites them.
 #
-# INCIDENT (2026-08-31, T-313): a seat (foundation) edited TODO.md directly in the
+# INCIDENT (2026-08-31): a seat (foundation) edited TODO.md directly in the
 # shared checkout, uncommitted, without holding the `todoedit` gateclaim (out of
 # protocol — confirmed by foundation's own account). code-review then finished an
 # unrelated, protocol-compliant `todoedit`-held landing and ran the bare single-path
@@ -254,7 +254,7 @@ for p in "${paths[@]}"; do
             cat >&2 <<EOF
 ⛔ REFUSED: '$p' on disk does not match its content at $old_ref — syncing to
 $new_ref would silently discard whatever changed it (the exact 2026-08-31
-T-313 incident this guard exists to prevent). Nothing has been touched.
+incident this guard exists to prevent). Nothing has been touched.
 
 Decide explicitly, then re-run:
   - it's YOUR OWN legitimate edit: commit it (in a detached worktree, per the

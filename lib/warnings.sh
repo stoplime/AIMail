@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# lib/warnings.sh — T-917 item 3: the 50% / 80% crossing warnings, per account, on THREE gauges
+# lib/warnings.sh — the 50% / 80% crossing warnings, per account, on THREE gauges
 #   (the 5-hour block, the weekly, the Fable-model weekly), plus a PROJECTED warning when the current
 #   burn reaches the block cap before the block resets. the owner 2026-09-22 17:03 (via assistant):
-#   "at the 50%/80% crossings ... no more mailing recommendations that nobody acts on" — item 4
-#   (announce-then-do) hangs off the same crossing events; this file emits them and records them.
+#   "at the 50%/80% crossings ... no more mailing recommendations that nobody acts on" — the
+#   balancer action (lib/act.sh, announce-then-do) hangs off the same crossing events; this file emits them and records them.
 #
 # One warning per (account, gauge, level, window). A window is the gauge's own reset epoch (block:
 # the ledger row's reset column; weekly/fable: the weekly file's reset column) — the same reading

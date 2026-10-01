@@ -3,7 +3,7 @@
 # a `pre-push` hook) actually INSTALLED AND RESOLVABLE right now, in each repo it is
 # supposed to protect?
 #
-# ⛔ WHY (2026-09-24, same incident class as t908/landingguard.sh): a real, working
+# ⛔ WHY (2026-09-24, same incident class as landingguard.sh's dangling-hooksPath case): a real, working
 #   pre-push check existing SOMEWHERE is not the same claim as it being LIVE in the
 #   checkout that actually pushes. The first version of this guard (93b1f78) was a
 #   real, tracked, falsified file that sat unreferenced by any .git/hooks/pre-push
@@ -21,8 +21,8 @@
 #                        or both markers -- reachable, but not actually this guard
 #   DANGLING             hook entry exists but its target is missing / not executable
 #   MISSING              no pre-push hook in the EFFECTIVE hooks dir
-#   HOOKSPATH_DANGLING   core.hooksPath names a directory that does not exist (t908
-#                        shape) -- git runs NO hooks at all, whatever sits in .git/hooks
+#   HOOKSPATH_DANGLING   core.hooksPath names a directory that does not exist (dangling
+#                        hooksPath) -- git runs NO hooks at all, whatever sits in .git/hooks
 #   NOT_A_REPO           the configured path is not a git repository
 #
 # ⚠ Honours each repo's own core.hooksPath (absolute, or relative to the worktree
@@ -87,7 +87,7 @@ _pg_hook_status() {
   fi
   local hooksdir; hooksdir="$(_pg_effective_hooks_dir "$repo")"
   if [[ "$hooksdir" == DANGLING:* ]]; then
-    printf 'HOOKSPATH_DANGLING\tcore.hooksPath=%s does not exist -- git runs NO hooks in this repo (t908 shape)\n' "${hooksdir#DANGLING:}"
+    printf 'HOOKSPATH_DANGLING\tcore.hooksPath=%s does not exist -- git runs NO hooks in this repo (dangling hooksPath)\n' "${hooksdir#DANGLING:}"
     return 0
   fi
   local hook="$hooksdir/$hookfile"
@@ -229,9 +229,9 @@ push_guard_selftest() {
   ln -s "$t/aimail_hooks/sterility_push_guard.sh" "$r/.git/hooks/pre-push"
   _t "ARM 7: pointed back at the real guard -> INSTALLED again" "$(_state "$r")" "INSTALLED"
 
-  # t908 shape
+  # Dangling-hooksPath case
   git -C "$r" config core.hooksPath "$t/does-not-exist/hooks"
-  _t "ARM 8 (t908): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
+  _t "ARM 8 (dangling hooksPath): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
   git -C "$r" config --unset core.hooksPath
 
   _t "ARM 9: a path that is not a repo -> NOT_A_REPO" "$(_state "$t/not_a_repo_at_all")" "NOT_A_REPO"
@@ -290,9 +290,9 @@ commit_msg_guard_selftest() {
   ln -s "$t/aimail_hooks/sterility_commit_msg_guard.sh" "$r/.git/hooks/commit-msg"
   _t "ARM 7: pointed back at the real guard -> INSTALLED again" "$(_state "$r")" "INSTALLED"
 
-  # t908 shape
+  # Dangling-hooksPath case
   git -C "$r" config core.hooksPath "$t/does-not-exist/hooks"
-  _t "ARM 8 (t908): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
+  _t "ARM 8 (dangling hooksPath): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
   git -C "$r" config --unset core.hooksPath
 
   _t "ARM 9: a path that is not a repo -> NOT_A_REPO" "$(_state "$t/not_a_repo_at_all")" "NOT_A_REPO"

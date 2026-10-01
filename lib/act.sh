@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/act.sh — T-917 item 4: the balancer ACTS. Announce-then-do, one seat per tick, never mid-turn.
+# lib/act.sh — the balancer ACTS. Announce-then-do, one seat per tick, never mid-turn.
 #
 # the owner 2026-09-22 17:03 (via assistant): "at the 50%/80% crossings, the balancer actually MOVES
 # seats using the resume-by-default migrate, one at a time, never a seat that's mid-turn (wait for

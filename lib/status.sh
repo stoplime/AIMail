@@ -97,7 +97,7 @@ doctor() {
   (( expired == 0 )) && ok "no expired state markers"
   problems=$((problems+expired))
 
-  # ─── Landing guard resolvability (t908) ─────────────────────────────────────
+  # ─── Landing guard resolvability ─────────────────────────────────────
   # A symlinked reference-transaction hook whose target is gone, or a core.hooksPath
   # into a directory that no longer exists, makes git run NO hooks — silently. Say so.
   source "$AIMAIL_LIB/landingguard.sh" 2>/dev/null || true

@@ -56,7 +56,7 @@ it WOULD recommend"*).
 
 ### 1.2 `lib/placement.sh` — the current spread rule (REPLACE)
 
-Built 2026-09-22 (T-917) after a **named, real incident** in its own header: *"r2 parked at
+Built 2026-09-22 after a **named, real incident** in its own header: *"r2 parked at
 16:55 with 6 of 9 seats on it while research sat at 8%. The balancer had mailed six
 recommendations and nothing moved; the pick logic had recommended moving the assistant itself
 off work. The owner: 'never again.'"* Five rules, each a real function:

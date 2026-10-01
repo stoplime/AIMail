@@ -195,7 +195,7 @@ mail_send() {
         "" \
         "Kill switch, a human's decision only: AIMAIL_SEND_GREEN_GUARD=0."
     fi
-    # ─── the fleet-tests line (T-969 / R-009) ──────────────────────────────────
+    # ─── the fleet-tests line (R-009) ──────────────────────────────────
     # An approval of a code change names the fleet-test run it stands on. On
     # 2026-09-30 a Platform approval went out without one, and the fleet
     # registry-isolation test then failed on the very commit it approved. A
@@ -587,7 +587,7 @@ mail_deliver() {
   (( summarized > 0 )) && info "📎 $summarized already-shown message(s) summarized above, not re-printed."
   (( deferred > 0 )) && info "⏸ $deferred deferred (size cap) — they arrive on the next poll."
   info ""
-  # ⛔ MODE-AWARE STEP 2 (PROP-fable-40-adjacent, item 1's own footer gap, 2026-09-10): a
+  # ⛔ MODE-AWARE STEP 2 (footer gap, 2026-09-10): a
   # persistent poller (`aimail poll-persistent`, see lib/poller.sh) never exits on mail, so
   # "re-arm" is FALSE under it -- printing it anyway is a real "one definition per kind"
   # violation (fable's own review of 60fb78b): a reader gets two contradictory instructions in
@@ -618,7 +618,7 @@ mail_deliver() {
 #   documented read path (`aimail deliver <seat>`) expecting to see it, it gets
 #   a one-line summary instead — the message was genuinely SHOWN (bytes left
 #   the process), just not to a reader who was there to receive them. MEASURED:
-#   this ate a T-391 gate approval and an authoring notice inside 15 minutes;
+#   this ate a gate approval and an authoring notice inside 15 minutes;
 #   both were recoverable only by reading unacked/ off disk by hand, which is
 #   not a documented command. ⇒ `show` closes that gap directly: it re-prints
 #   ONE message's full body, unconditionally, regardless of shown-state — the

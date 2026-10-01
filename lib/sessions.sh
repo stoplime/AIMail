@@ -702,7 +702,7 @@ EOF
   _t "orphan worker carrying a dead session's id -> DEAD, not alive" \
      "$(_state SID-DDDD)" "DEAD"
 
-  # ⛔ The wrapper must not be counted as a poller in its own right (T-351: one
+  # ⛔ The wrapper must not be counted as a poller in its own right (one
   #   healthy poller matches a loose pattern twice, so a count cannot tell one
   #   from two). Assert the POLLER LIST length, not just the state.
   cat > "$t/procs" <<EOF

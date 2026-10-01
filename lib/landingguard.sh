@@ -3,7 +3,7 @@
 # a `reference-transaction` hook) actually INSTALLED AND RESOLVABLE in each repo it is
 # supposed to protect, right now?
 #
-# ⛔ WHY (t908, 2026-09-22): a project repo's `core.hooksPath` pointed at an
+# ⛔ WHY (2026-09-22): a project repo's `core.hooksPath` pointed at an
 #   absolute path under a checkout that had been moved away. Git treats a hooksPath
 #   that names a nonexistent directory as "no hooks" — not an error — so the
 #   pre-commit guard silently stopped firing for ~26 h (09-21 12:30:47 → 09-22 14:40:49)
@@ -18,7 +18,7 @@
 #   DANGLING            hook entry exists but its target is missing / not executable
 #   MISSING             no reference-transaction hook in the EFFECTIVE hooks dir
 #   NO_PROTECTED_REF    hook resolves but `main-landing-guard.protected-ref` is unset → inert
-#   HOOKSPATH_DANGLING  core.hooksPath names a directory that does not exist (t908 shape) —
+#   HOOKSPATH_DANGLING  core.hooksPath names a directory that does not exist (dangling hooksPath) —
 #                       git runs NO hooks at all, whatever sits in .git/hooks
 #   NOT_A_REPO          the configured path is not a git repository
 #
@@ -66,7 +66,7 @@ landing_guard_status() {
   fi
   local hooksdir; hooksdir="$(_lg_effective_hooks_dir "$repo")"
   if [[ "$hooksdir" == DANGLING:* ]]; then
-    printf 'HOOKSPATH_DANGLING\tcore.hooksPath=%s does not exist -- git runs NO hooks in this repo (t908 shape)\n' "${hooksdir#DANGLING:}"
+    printf 'HOOKSPATH_DANGLING\tcore.hooksPath=%s does not exist -- git runs NO hooks in this repo (dangling hooksPath)\n' "${hooksdir#DANGLING:}"
     return 0
   fi
   local hook="$hooksdir/reference-transaction"
@@ -125,7 +125,7 @@ landing_guard_report() {
 # ─── selftest — every state, driven through REAL git in scratch repos ──────────
 # The falsification arm is the point: the SAME repo reads INSTALLED, then its
 # symlink target is removed and it must read DANGLING. A check that cannot go red
-# on a dangled hook is the check t908 already had (none).
+# on a dangled hook is the check this repo had before (none).
 landing_guard_selftest() {
   local t; t="$(mktemp -d)"
   local pass=0 fail=0
@@ -161,10 +161,10 @@ landing_guard_selftest() {
   _t "ARM 6: target present but not executable -> DANGLING (git skips it)" "$(_state "$r")" "DANGLING"
   chmod +x "$t/aimail_hooks/main_only_landing_guard.sh"
 
-  # t908 shape: core.hooksPath names a directory that does not exist. The hook in
+  # Dangling-hooksPath case: core.hooksPath names a directory that does not exist. The hook in
   # .git/hooks is still there and STILL must not count -- git would not consult it.
   git -C "$r" config core.hooksPath "$t/does-not-exist/hooks"
-  _t "ARM 7 (t908): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
+  _t "ARM 7 (dangling hooksPath): core.hooksPath -> nonexistent dir -> HOOKSPATH_DANGLING (despite a hook in .git/hooks)" "$(_state "$r")" "HOOKSPATH_DANGLING"
 
   # hooksPath honoured when it DOES exist: absolute, then relative to the top-level
   mkdir -p "$t/shared_hooks"

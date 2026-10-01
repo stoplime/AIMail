@@ -1436,7 +1436,7 @@ budget_status() {
   #    checks it) is not an error, just not yet swept.
   source "${BASH_SOURCE[0]%/*}/placement.sh" 2>/dev/null || true
   if command -v placement_report >/dev/null 2>&1; then
-    info "PLACEMENT (T-917 rules: pinned / precious / fable headroom / spread / projected):"
+    info "PLACEMENT (placement rules: pinned / precious / fable headroom / spread / projected):"
     placement_report 2>&1 | sed 's/^/  /' || true
     echo
   fi
@@ -2041,14 +2041,14 @@ budget_autopilot() {
       ( balance_evaluate ) || warn "autopilot: balance evaluation did not complete (see above)"
     fi
   fi
-  # T-917 item 3 (2026-09-22): after the accounts' own ticks have refreshed the ledgers, emit the
+  # 2026-09-22: after the accounts' own ticks have refreshed the ledgers, emit the
   # 50/80 crossing warnings (block / weekly / fable-model, plus the projected cap-hit) ONCE per tick.
   # Reads only; one mail per (account, gauge, level, window). Never fails the tick.
   if [[ "${AIMAIL_WARNINGS:-1}" == "1" ]]; then
     source "${BASH_SOURCE[0]%/*}/placement.sh" 2>/dev/null || true
     source "${BASH_SOURCE[0]%/*}/warnings.sh" 2>/dev/null && budget_warnings >/dev/null 2>&1 || true
   fi
-  # T-917 item 4 (2026-09-22): the balancer ACTS -- announce-then-do, one seat per tick, never
+  # 2026-09-22: the balancer ACTS -- announce-then-do, one seat per tick, never
   # mid-turn, behind AIMAIL_BALANCE_ACT=1 (lib/act.sh). Runs after the warnings so a fresh
   # crossing and the move it triggers land in the same tick's mail.
   if [[ "${AIMAIL_BALANCE_ACT:-0}" == "1" ]]; then

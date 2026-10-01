@@ -28,7 +28,7 @@ This means the actual "build" here is mostly **more instruction text in the same
 message**, not new bash logic to interpret TODO.md — parsing a large, prose-heavy, ever-evolving
 narrative file mechanically (regex for "unowned", "no owner assigned", "needs the project owner's word")
 would be exactly the kind of brittle, easily-fooled mechanism this fleet's own standing
-practice already avoids elsewhere (every ownership judgment call made tonight — t649 vs.
+practice already avoids elsewhere (every ownership judgment call made tonight — one ticket vs.
 page_geometry's different shapes, which of the 14 decision-log items were fable's, which
 gateclaim entries needed a fresh look vs. trusting the description — was read and reasoned
 about by a real turn, never regex-matched). The reasoning belongs to the resuming seat, which

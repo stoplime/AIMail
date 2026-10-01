@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# placement.sh — WHERE a seat belongs, as pure decisions over existing state (T-917, the owner
-# 2026-09-22 16:42 / 16:45 / 17:03 / 17:28).
+# placement.sh — WHERE a seat belongs, as pure decisions over existing state (the owner's
+# requirements of 2026-09-22).
 #
 # ⛔ THE INCIDENT: r2 parked at 16:55 with 6 of 9 seats on it while research sat at 8%. The
 #   balancer had mailed six recommendations and nothing moved; the pick logic had recommended

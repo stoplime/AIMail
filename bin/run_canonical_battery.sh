@@ -21,7 +21,7 @@
 # ⛔⛔ CORRECTION (fable, 2026-09-08 12:05, ruling on foundation's env sweep + main's pivot report):
 # the paragraph immediately below, from 2026-09-07, is WRONG and kept struck rather than deleted,
 # per this repo's own convention (_platform_env.py) for a corrected claim.
-#   "foundation, 2026-09-07 (architect's finding, T-719): a fresh worktree has no `.env`, so
+#   "foundation, 2026-09-07 (architect's finding): a fresh worktree has no `.env`, so
 #   `config/environment_config.py`'s own `get_env_var('SENTRY_DSN')` raises at import time UNLESS
 #   the calling shell already happens to have `SENTRY_DSN=''` exported ... Now exported explicitly
 #   on the one line that invokes `run_unit_tests.py`, so this is foolproof regardless of the
@@ -54,7 +54,7 @@
 #      script, never read from the source file -- with the worktree-.env refusal above now also in
 #      force, that export is finally the thing that makes it effective, closing the gap the struck
 #      paragraph above wrongly believed was already closed.
-#   3. `TAKEOFF_POC_ROOT` is exported explicitly (fable's T-719 ruling; previously absent here).
+#   3. `TAKEOFF_POC_ROOT` is exported explicitly (previously absent here).
 #   4. The log header names the worktree, its HEAD sha, how the child process itself resolves
 #      `poc_root()`, the env source path and the exported NAMES (never values), the conda python
 #      path, and the collected test count -- a count that differs from the recorded baseline run's
@@ -70,7 +70,7 @@
 #   5. `BASELINE_COUNT_FILE` now reads the COMMITTED `$PLATFORM_ROOT/baseline_test_count.txt`,
 #      never `/tmp`. The `/tmp` path becomes this wrapper's own WRITTEN run record (so a report
 #      always has a same-run copy to cite), never the compare target -- a `/tmp`-only compare
-#      target resets to nothing on a reboot, the same non-durability T-719 already fixed for
+#      target resets to nothing on a reboot, the same non-durability already fixed for
 #      baseline_norm.txt's own sibling.
 #   6. The wrapper now computes the FAIL/ERROR name-set diff ITSELF: sorted `FAIL: `/`ERROR: `
 #      lines out of its own log, `comm -23`/`comm -13` against the COMMITTED
@@ -90,7 +90,7 @@
 # sets, before committing). Every future re-baseline write of baseline_norm.txt must also use
 # `LC_ALL=C sort`, stated here so the next one doesn't drift back.
 #
-# T-762 (fable's section 8 ruling, 2026-09-08): two gate tiers.
+# Two gate tiers (2026-09-08).
 #   --gate fast = `testing/` only (`run_unit_tests.py --tier unit`), mocked, NO sharedcorpus
 #     claim (nothing in it reads the real corpus), real-tier modules skipped (they need a DB),
 #     its own baseline pair (`baseline_norm_unit.txt`/`baseline_test_count_unit.txt`) -- sealed
@@ -100,16 +100,15 @@
 #     this script's own prior behavior), under `sharedcorpus`, against the EXISTING baselines.
 #     Required at batch checkpoints, and for any change to testing_system/, to this script's or
 #     run_unit_tests.py's discovery/count/normalize/compare logic, or to detection or billing
-#     behaviour (project owner's ruling, 2026-09-21; T-762 §8 amended the same day). A baseline VALUE
+#     behaviour (amended 2026-09-21). A baseline VALUE
 #     bump is verified by the FAST run at its own tip.
 # NO DEFAULT: an invocation without `--gate` refuses outright, so nobody mistakes a silent full
-# for fast or the reverse. Every gate run before this flag existed (tonight's own T-741/T-746/
-# T-751/T-765/T-766/T-767/T-768) ran what is now called `full`, a strict superset of `fast` --
-# no retroactive re-gating, per the same ruling.
+# for fast or the reverse. Every gate run before this flag existed ran what is now called
+# `full`, a strict superset of `fast` -- no retroactive re-gating.
 #
 # Usage: run_canonical_battery.sh --gate fast|full [--wait <minutes>] <target-project-worktree-path> <seat-name> ["<claim-desc>"]
 #
-# --wait <minutes> (T-762 §3.4, 2026-09-21): instead of REFUSING an over-budget or lock-held
+# --wait <minutes> (2026-09-21): instead of REFUSING an over-budget or lock-held
 # launch, take a FIFO ticket in bin/battery_queue.sh's queue and launch when this ticket is at the
 # head AND the budget checks pass AND (full) sharedcorpus is actually acquired; FULL tickets go
 # ahead of FAST tickets; `WAIT TIMED OUT` (exit 5) after <minutes>. While ANY ticket is live, a
@@ -117,7 +116,7 @@
 set -u
 
 # Defined early (before the concurrency-budget check below, which delegates to a python
-# invocation against PLATFORM_ROOT -- PROP-fable-40, T-804) rather than down near the rest of
+# invocation against PLATFORM_ROOT) rather than down near the rest of
 # the path constants -- everything else that uses them still runs after argument parsing either
 # way, so moving them costs nothing and lets the very first check use them.
 #
@@ -165,7 +164,7 @@ if [ "$#" -eq 1 ] && [ -z "${1:-}" ]; then
 fi
 
 if [ "$GATE" != "fast" ] && [ "$GATE" != "full" ]; then
-    echo "⛔ REFUSED: --gate fast|full is required, no default (T-762, fable's section 8 ruling)." >&2
+    echo "⛔ REFUSED: --gate fast|full is required, no default (the two gate tiers are described at the top of this file)." >&2
     echo "   fast = testing/ only, mocked, no sharedcorpus claim, own empty-target unit baselines." >&2
     echo "   full = testing/ + testing_system/takeoff_tests + REAL_TIER_MODULES, under sharedcorpus." >&2
     echo "   Usage: run_canonical_battery.sh --gate fast|full [--wait <minutes>] <worktree-path> <seat-name> [claim-desc]" >&2
@@ -179,7 +178,7 @@ fi
 # budget verdict runs because a --wait ticket records it.
 if [ "$GATE" = "full" ]; then REQUESTED=1; else REQUESTED=4; fi
 
-# T-804 follow-up (fable's 2026-09-09 22:56 ruling): WORKTREE/SEAT/DESC and the two worktree
+# WORKTREE/SEAT/DESC and the two worktree
 # guard checks are parsed HERE, right after argument parsing, rather than down near the rest of
 # the path constants (their own original position, still marked below) -- the occupancy
 # delegation call just below needs a real, validated $WORKTREE path BEFORE it can safely
@@ -201,12 +200,11 @@ if [ ! -d "$WORKTREE" ]; then
     exit 2
 fi
 
-# AUTO-SUMMARY (PROP-73, assigned by assistant 2026-09-18T10:02, per code-review's own gate on
-# the manual version of this three times tonight): every gate report before this point had to
+# AUTO-SUMMARY (2026-09-18, after the manual version of this was owed three times in one
+# night): every gate report before this point had to
 # quote the wrapper's own terminal stdout, which lives at a session-private harness path a
 # gater cannot find by search unless the reporting seat remembers to `tee` it to a durable
-# location by hand (T-788's own 04:57 retraction, T-888(b)'s 06:09 duplicate-run, and this same
-# T-888 4th-site gate's own 10:04 hold, all this same night). `SUMMARY` is computed here --
+# location by hand (a retraction, a duplicate run and a hold, all in that same night). `SUMMARY` is computed here --
 # right after the worktree existence check, before the sharedcorpus claim below -- so the
 # CLAIMED/RELEASED lines land in it too, not only the post-battery block. `summ()` writes each
 # line to stdout (unchanged behavior for any caller already redirecting stdout to its own log)
@@ -216,21 +214,21 @@ SUMMARY="/tmp/canonical_battery_${SEAT}_${TS}.summary"
 : > "$SUMMARY"
 summ() { printf '%s\n' "$*" | tee -a "$SUMMARY"; }
 
-# T-775 follow-on (fable's ruling, 2026-09-09 03:32): a machine CONCURRENCY BUDGET, checked and
+# 2026-09-09: a machine CONCURRENCY BUDGET, checked and
 # printed FIRST, before any worktree/env work -- a refusal must cost nothing. Tonight's incident:
 # three FULL/unit batteries plus a 16-worker COMPARE run stacked on one box with no memory-aware
 # limit, exhausting swap (11Gi/11Gi used) and silently killing main's own FULL-battery process
 # mid-run. `sharedcorpus` only serialises the CORPUS phase; it never protected memory, which is
 # why FAST/COMPARE runs stacked freely beside FULL batteries. Budget: WORKER SLOTS, not
-# invocations (#134, fable, 2026-09-09 13:36) -- a serial runner occupies 1 slot, a pooled one
+# invocations (2026-09-09 13:36) -- a serial runner occupies 1 slot, a pooled one
 # occupies 1 (itself) + its own live worker-child count, refusing when `occupancy + requested >
 # budget`.
-# ⛔⛔ ONE DEFINITION, NOT TWO HAND-COPIES (PROP-fable-40, T-804, 2026-09-09 22:40): this block
+# ⛔⛔ ONE DEFINITION, NOT TWO HAND-COPIES (2026-09-09 22:40): this block
 # used to re-implement its own bash/awk copy of "is this argv a test process", separately from
 # `testing_runner_workers.py`'s own `_occupancy_from_ps_lines` (the #134 driver's Python-side
 # twin). Two copies of the same predicate drift together when written together and apart when
 # only one is patched later -- MEASURED, live incident: both copies were blind to a bare
-# `python -m unittest <module>` invocation (framing's own PROP-fable-39 work) at the exact same
+# `python -m unittest <module>` invocation (seen during framing work) at the exact same
 # moment, reading occupancy=0/14 while it genuinely contended with a pooled `--workers auto` FAST
 # run; one of that run's own pool workers was subsequently killed (`BrokenProcessPool`). Fixed by
 # DELETING the bash-side copy: this wrapper now DELEGATES the occupancy question to the Python
@@ -251,15 +249,15 @@ summ() { printf '%s\n' "$*" | tee -a "$SUMMARY"; }
 # correction on this block's first pass: a grep is a claim about prose, not behavior -- a stray
 # comment naming `--occupancy` in an older file would read as "present" and then fail confusingly
 # as `delegation_unreachable` instead of the true, more specific reason).
-# ⛔⛔ VERIFIED EMPIRICALLY, NOT ASSUMED FROM fable's OWN DESCRIPTION: an argparse-style "exit 2,
+# ⛔⛔ VERIFIED EMPIRICALLY, NOT ASSUMED FROM A DESCRIPTION: an argparse-style "exit 2,
 # unrecognized arguments" was the FIRST guess for what an old worktree does, but this script has
-# no argparse and (before T-804) no `__main__` guard at all -- checked out ddd3842e0 (this
-# module's own tip immediately before T-804) into a real detached worktree and ran `python3
+# no argparse and (before the occupancy flag was added) no `__main__` guard at all -- checked out ddd3842e0 (this
+# module's own tip immediately before that change) into a real detached worktree and ran `python3
 # testing_runner_workers.py --occupancy` there directly: exit 0, ZERO lines of output. An old
-# worktree does not refuse the flag, it silently ignores it (nothing in the pre-T-804 module's
+# worktree does not refuse the flag, it silently ignores it (nothing in the older module's
 # own top level acts on argv at all). The real, load-bearing signal is therefore "did the
 # subprocess's OWN stdout contain an `occupancy=` line", not its exit code -- checked below.
-# T-762 §3.4: the queue library lives beside this script (a worktree's wrapper sources its own
+# The queue library lives beside this script (a worktree's wrapper sources its own
 # worktree's copy, so a gate on this file never reads main's version by accident).
 AIMAIL_BIN_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$AIMAIL_BIN_SELF/battery_queue.sh"
@@ -332,7 +330,7 @@ SWAP_USED_GIB="$(free -g 2>/dev/null | awk '/^Swap:/ {print $3}')"
 # since a false GO on a genuinely thrashing box is what killed a FULL battery mid-run tonight.
 SWAP_ACTIVITY="$(vmstat -y 1 3 2>/dev/null | tail -n +3 | awk '{s+=$7+$8} END {print s+0}')"
 [ -z "${SWAP_ACTIVITY:-}" ] && SWAP_ACTIVITY=0
-# T-762 §3.4: slots reserved by runs admitted from the queue moments ago, whose worker children
+# Slots reserved by runs admitted from the queue moments ago, whose worker children
 # the occupancy reader cannot see yet (bin/battery_queue.sh, expires on its own).
 RESERVED_SLOTS="$(bq_reserved_slots)"
 OCCUPANCY_EFF=$((OCCUPANCY + RESERVED_SLOTS))
@@ -404,7 +402,7 @@ fi
 return 0
 }
 
-# T-762 §3.4: the queue. See bin/battery_queue.sh for the ticket protocol.
+# The queue. See bin/battery_queue.sh for the ticket protocol.
 _sharedcorpus_holder() {
     local d="${AIMAIL_CLAIMS:-/tmp/aimail-gate-claims}/sharedcorpus"
     [ -d "$d" ] || return 1
@@ -485,13 +483,13 @@ else
     LIVE_QUEUE="$(bq_live_tickets)"
     if [ -n "$LIVE_QUEUE" ]; then
         echo "⛔ REFUSED: $(printf '%s\n' "$LIVE_QUEUE" | grep -c .) launch(es) are queued for a slot (head: $(bq_describe "$(bq_head)")) --" >&2
-        echo "   pass --wait <minutes> to join the queue rather than jump it (T-762 §3.4)." >&2
+        echo "   pass --wait <minutes> to join the queue rather than jump it (see bin/battery_queue.sh)." >&2
         echo "   \`$AIMAIL_BIN_SELF/battery_queue.sh --list\` shows the queue." >&2
         exit 2
     fi
     if ! budget_verdict; then
         printf '%s' "$BUDGET_REFUSAL" >&2
-        echo "   Pass --wait <minutes> to queue for a slot instead of retrying by hand (T-762 §3.4)." >&2
+        echo "   Pass --wait <minutes> to queue for a slot instead of retrying by hand (see bin/battery_queue.sh)." >&2
         exit 2
     fi
 fi
@@ -501,16 +499,16 @@ AIMAIL_BIN="$AIMAIL_BATTERY_SELF/bin"
 ENV_SOURCE="$PLATFORM_ROOT/zignore/.env"
 # c7 (fable, 2026-09-08 13:00 ruling on main's path check): BOTH baseline files are compared
 # against their COMMITTED target-project copies, never a /tmp file -- a /tmp-only compare
-# target resets to nothing on a reboot and is exactly the non-durability T-719 already fixed for
+# target resets to nothing on a reboot and is exactly the non-durability already fixed for
 # baseline_norm.txt's own sibling. The /tmp paths below are now OUTPUT the wrapper writes for its
 # own run record (so a report always has a same-run copy to point at), never what it reads to
 # decide pass/fail.
-# T-762: the FAST gate's own pair, separate files, separate population (testing/ only, sealed
+# The FAST gate's own pair, separate files, separate population (testing/ only, sealed
 # empty for failures) -- never compared against the FULL gate's own pair below, and vice versa.
 # ⛔⛔ baseline_test_count.txt (FULL, all-tier) is GONE (fable's ruling, 2026-09-09 06:26/06:28,
 # item 3) -- it was a hand-maintained shadow of unit + system that every FAST-gated,
 # unit-only-touching landing silently broke (and vice versa for a system-only landing), which is
-# exactly what stranded main's own T-751 landing 30 tests off for one gate cycle tonight. The
+# exactly what stranded a landing 30 tests off for one gate cycle tonight. The
 # FULL count is now DERIVED at check time as unit + system, every run, from the two Ran-
 # denominated tier files below -- one source, no shadow copy, nothing to remember to bump twice.
 # Both `baseline_test_count_unit.txt` and `baseline_test_count_system.txt` are RAN-denominated by
@@ -542,13 +540,12 @@ if [ "${#REQUIRED_ENV_NAMES[@]}" -eq 0 ] || [ -z "${REQUIRED_ENV_NAMES[0]}" ]; t
     exit 1
 fi
 
-# REAL-TIER MODULES (fable, 2026-09-08 22:03 ruling, T-765 stopgap): `run_unit_tests.py`'s own
+# REAL-TIER MODULES (stopgap, 2026-09-08 22:03): `run_unit_tests.py`'s own
 # `_filter_suite` correctly excludes any `BaseTestClass` subclass from the plain battery, but
 # nothing in this fleet's standing practice then RUNS what got excluded -- `run_system_tests.py`
 # discovers ONLY `testing_system/`, never `testing/`, so a file tiered this way goes silently
-# inert (the same shape T-627b/T-649's own acceptance tests were already found in). This table is
-# the stopgap until a real, durable real-tier entry point exists (main's own ticket, per the
-# ruling): one `python -m unittest <module>` per entry, under this wrapper's own env-by-name
+# inert (the same shape other acceptance tests were already found in). This table is
+# the stopgap until a real, durable real-tier entry point exists (a separate piece of work): one `python -m unittest <module>` per entry, under this wrapper's own env-by-name
 # supply, reported in the summary block as its own named line -- never folded into
 # BATTERY_EXIT/COUNT_EXIT/NAME_SET_EXIT, and never silently passing. Add the next tiered file as
 # one more line here, not a new mechanism.
@@ -557,8 +554,7 @@ REAL_TIER_MODULES=(
 )
 
 # WORKTREE/SEAT/DESC and the two worktree guard checks (root-checkout refusal, existence check)
-# were moved up to right after argument parsing (T-804 follow-up, fable's 2026-09-09 22:56
-# ruling) -- the occupancy delegation needs a validated $WORKTREE before it can safely reference
+# were moved up to right after argument parsing (2026-09-09 22:56) -- the occupancy delegation needs a validated $WORKTREE before it can safely reference
 # it. Nothing else changes here; this comment is a pointer for whoever next greps for them.
 
 # baseline paths read from the gated WORKTREE -- see the comment near BASELINE_NORM_FILE_FULL's
@@ -650,12 +646,12 @@ if [ "$GATE" = "full" ]; then
     if [ "$CLAIM_EXIT" -ne 0 ]; then
         echo "⛔ REFUSED: sharedcorpus is already held -- see the message above for the holder." >&2
         echo "   A battery run here would collide with theirs (2026-09-07 incident: both runs voided)." >&2
-        echo "   Pass --wait <minutes> to queue for it instead of retrying by hand (T-762 §3.4)." >&2
+        echo "   Pass --wait <minutes> to queue for it instead of retrying by hand (see bin/battery_queue.sh)." >&2
         exit 3
     fi
     fi
 fi
-# T-762: fast never claims sharedcorpus -- nothing under testing/ reads the real corpus, so
+# fast never claims sharedcorpus -- nothing under testing/ reads the real corpus, so
 # there is nothing this claim would protect, and claiming it anyway would make every fast gate
 # queue behind full gates for no reason.
 
@@ -664,7 +660,7 @@ if [ "$GATE" = "full" ]; then
     RELEASED=0
 fi
 
-# T-762 §3.5 (fable's throughput design, 2026-09-21): a kill mid-run used to leave nothing
+# 2026-09-21: a kill mid-run used to leave nothing
 # behind -- no summary line, no released claim, the occupancy reader (and any seat checking
 # later) sees an ambiguous state indistinguishable from "still running". TESTS_STARTED/
 # TESTS_COMPLETED bracket the one long-running call below so the SAME combined handler can
@@ -719,8 +715,7 @@ POC_ROOT_RESOLVED="$(cd "$WORKTREE" && TAKEOFF_POC_ROOT="$POC_ROOT" "$CONDA_PY" 
 [ -z "$POC_ROOT_RESOLVED" ] && POC_ROOT_RESOLVED="(unresolved -- see log for the child's own stderr)"
 
 TIER_FLAG=()
-# T-775 adoption (fable's ruling, 2026-09-09 07:41, after T-782/T-783 closed the sealed
-# blockers): FAST gates run --workers auto. The machine concurrency budget above (process
+# 2026-09-09 07:41, after the sealed blockers were closed: FAST gates run --workers auto. The machine concurrency budget above (process
 # count, memory pressure, live-swap check) is the guard that made this safe to turn on --
 # nothing new here. FULL stays serial control (the reference every parallel FAST result is
 # compared against); a --timing run stays serial too (per-module elapsed under a pool
@@ -765,14 +760,14 @@ TESTS_COMPLETED=1
 # REAL-TIER MODULES run (fable, 2026-09-08 22:03 ruling): each entry in REAL_TIER_MODULES is run
 # separately, under the SAME env-by-name supply, and reported by name -- never silently, never
 # folded into the unit result above.
-# ⛔ T-774 (2026-09-08): the module-scoped T-592 exemption this block used to carry (a note
+# ⛔ 2026-09-08: the module-scoped exemption this block used to carry (a note
 # sparing testing.test_dependencies' own raw exit from the aggregate, for its then-known
 # "unexpected success" quirk under python -m unittest) is REMOVED here, paired with the same-day
-# commit that resolved T-592 on its own terms (the stale @expectedFailure decorator came out of
+# commit that resolved the quirk on its own terms (the stale @expectedFailure decorator came out of
 # the test itself) -- an exemption that outlives the reason it was named for is exactly the
-# disabled-not-fixed shape fable's own ruling warned against. If a future real-tier module needs
+# disabled-not-fixed shape. If a future real-tier module needs
 # a genuinely known, still-live quirk named here, name it the same way this one was (module-
-# scoped, dated, tied to a real ticket) rather than reintroducing a general allowance.
+# scoped, dated, tied to a real, tracked issue) rather than reintroducing a general allowance.
 REAL_TIER_EXIT=0
 REAL_TIER_SUMMARY=()
 if [ "$GATE" = "full" ]; then
@@ -789,7 +784,7 @@ if [ "$GATE" = "full" ]; then
         REAL_TIER_SUMMARY+=("REAL_TIER_EXIT[$module]=$rt_exit (${rt_ran_count:-0} tests, log: $RT_LOG)")
     done
 fi
-# T-762: fast skips REAL_TIER_MODULES entirely -- they need a DB, which fast's own definition
+# fast skips REAL_TIER_MODULES entirely -- they need a DB, which fast's own definition
 # (mocked, no sharedcorpus) does not supply.
 
 # FLEET TESTS (2026-09-29): the guard-style tests that police our own tooling live in the
@@ -913,7 +908,7 @@ else
     NAME_SET_EXIT=1
 fi
 
-# T-762 follow-on (fable's ruling, 2026-09-09 03:04, the T-775 co-location-skip finding):
+# 2026-09-09 03:04, after a co-location-skip finding:
 # per-test skip NAMES carried into the battery log beside the FAIL/ERROR set. NEVER a gate
 # refusal -- a skip reason legitimately varies by environment -- purely informational, so a
 # name that appears in one execution mode and not another (e.g. serial vs a parallel worker
@@ -930,10 +925,8 @@ else
 fi
 # ⛔⛔ "informational never means silent when empty" (fable's own standing rule from tonight's
 # three instances -- count file, norm file, skip names) -- and a step further: a check that
-# CANNOT SEE its input is the missing-baseline-file hole in another coat (fable's ruling #130
-# item c, 2026-09-09 11:12). This section's own SKIP_NAMES was inert on every run tonight,
-# serial and parallel alike, until the SKIP: printer actually landed on both paths (T-746 chunk
-# B follow-on) -- an inert check and a genuinely clean 0-skip run printed the SAME nothing, and
+# CANNOT SEE its input is the missing-baseline-file hole in another coat (2026-09-09 11:12). This section's own SKIP_NAMES was inert on every run tonight,
+# serial and parallel alike, until the SKIP: printer actually landed on both paths (a follow-on change) -- an inert check and a genuinely clean 0-skip run printed the SAME nothing, and
 # nobody could tell them apart. If the runner's own summary reports skipped>0 but this section
 # found ZERO `^SKIP: ` lines, REFUSE (distinct exit 2, not the generic 1 the other checks use)
 # rather than silently reporting nothing.
@@ -974,7 +967,7 @@ if [ "$GATE" = "full" ]; then
     fi
     rm -rf "$BACKUP_DIR" 2>/dev/null
 fi
-# T-762: fast never touched src/outputs (no backup was taken), so there is nothing to check or
+# fast never touched src/outputs (no backup was taken), so there is nothing to check or
 # restore -- CORPUS_EXIT stays 0 by construction, not by a vacuous check.
 
 summ "gate=$GATE"

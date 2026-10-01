@@ -4,13 +4,11 @@
 # /tmp/canonical_battery_<seat>_<ts>.summary), and that file's own "worktree HEAD:" line must
 # equal the tip actually being gated.
 #
-# WHY: this exact acceptance was owed three separate times in one night (T-788's own 04:58:51
-# retraction, T-888(b)'s 06:09 duplicate run, this same T-888 4th-site migration's own 10:04
-# hold) -- a gate request that quotes only the RAW RUNNER log (no "worktree HEAD:" line, no
+# WHY: this exact acceptance was owed three separate times in one night (a retraction, a
+# duplicate run and a hold) -- a gate request that quotes only the RAW RUNNER log (no "worktree HEAD:" line, no
 # five _EXIT lines) is unprovable from disk: the reader cannot tell which tree the battery
-# actually measured. run_canonical_battery.sh now writes that citable file itself (PROP-73,
-# assigned by assistant 2026-09-18T10:02); this script is the acceptance check named in that
-# same assignment -- "a gate recipe refuses a run with no summary file; refuses a summary whose
+# actually measured. run_canonical_battery.sh now writes that citable file itself (2026-09-18);
+# this script is the acceptance check named at the time -- "a gate recipe refuses a run with no summary file; refuses a summary whose
 # worktree HEAD doesn't match the requested tip" -- made mechanical instead of a gater's own
 # by-hand grep, the same shape check_range_code_sha.py already gave the code_sha convention.
 #

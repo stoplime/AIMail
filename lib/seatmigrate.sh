@@ -825,7 +825,7 @@ seat_migrate() {
   done
   [[ -n "$owner_approved" ]] && why="owner-approved: $owner_approved${why:+; $why}"
   source "${BASH_SOURCE[0]%/*}/budget.sh" 2>/dev/null || true
-  # ⛔ PLACEMENT RULES (lib/placement.sh, T-917): the precious account, the spread rule and
+  # ⛔ PLACEMENT RULES (lib/placement.sh): the precious account, the spread rule and
   #   fable's own headroom are checked BEFORE the handover is requested, so a refused move
   #   costs nothing. --owner-approved is the one override for all of them, and it is logged.
   source "${BASH_SOURCE[0]%/*}/placement.sh" 2>/dev/null || true

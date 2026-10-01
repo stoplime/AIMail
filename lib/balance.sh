@@ -458,7 +458,7 @@ _bal_would_recommend() {
   local gap; [[ "$hotp" == "INF" ]] && gap="INF" || gap="$(awk -v a="$hotp" -v b="$coldp" 'BEGIN{printf "%.4f", a-b}')"
   while IFS=$'\t' read -r seat wt raw usd model last; do
     [[ "$seat" == "_unattributed" || "$seat" == "$sup" ]] && continue
-    # R1 (T-917): pinned seats are never recommended -- the supervisor AND the vice
+    # R1: pinned seats are never recommended -- the supervisor AND the vice
     source "${BASH_SOURCE[0]%/*}/placement.sh" 2>/dev/null || true
     command -v _pl_is_pinned >/dev/null 2>&1 && _pl_is_pinned "$seat" && continue
     act="$(_bal_seat_activity "$seat")"; (( act >= 9 )) && continue
@@ -474,7 +474,7 @@ _bal_would_recommend() {
     fi
   done < <(seat_costs "$hot" "${AIMAIL_BALANCE_WINDOW_H:-3}")
   if [[ -n "$best" ]]; then
-    # R2-R5 (T-917): the TARGET is what placement says for THIS seat, not the coldest account by pressure
+    # R2-R5: the TARGET is what placement says for THIS seat, not the coldest account by pressure
     local target="$cold"
     if command -v placement_pick >/dev/null 2>&1; then
       local -a others=(); local a2; for a2 in ${AIMAIL_FLEET_ACCOUNTS:-}; do [[ "$a2" != "$hot" ]] && others+=("$a2"); done

@@ -26,8 +26,7 @@ that time (self-corrects at the manifest's own next real run) but named the gene
 existing pre-ff check this widens only covered probe-only chains where a single seat lands a
 single JSON's own commit and can eyeball the mismatch by hand -- this makes the same check
 mechanical, over every JSON any commit in a landed range touches, so a multi-commit chain's
-own carried-forward or rebased JSON can't go unnoticed the way this one did (PROP-73 row,
-main's 2026-09-18 handover).
+own carried-forward or rebased JSON can't go unnoticed the way this one did (2026-09-18 handover).
 
 USAGE:
     check_range_code_sha.py <base-ref> <tip-ref> [--repo PATH]

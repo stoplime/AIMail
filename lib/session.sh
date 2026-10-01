@@ -286,7 +286,7 @@ session_check() {
   echo
 
   # ── 7. Landing guard — installed AND resolvable in every repo it protects? ──
-  #   (lib/landingguard.sh; t908, 2026-09-22: a hooksPath into a vanished location ran
+  #   (lib/landingguard.sh; 2026-09-22: a hooksPath into a vanished location ran
   #   no hooks for 26 h with zero signal. Seat-independent — checked for every session.)
   info "── LANDING GUARD (reference-transaction, per configured repo) ──"
   source "$AIMAIL_LIB/landingguard.sh" 2>/dev/null || true

@@ -256,7 +256,7 @@ def _poller_seat(cmd):
     ⛔ ANCHORED (`^`) ON PURPOSE. An unanchored search matches the harness
       WRAPPER too (`/bin/bash -c … eval '… aimail poll main'`), and the wrapper
       is not itself the poller — counting both doubles every seat's poller
-      count, which is exactly the T-351 trap that makes a bare `pgrep -cf`
+      count, which is exactly the double-count trap that makes a bare `pgrep -cf`
       unable to tell one healthy poller from two.
     """
     if not cmd or _NOT_A_POLLER.search(cmd):

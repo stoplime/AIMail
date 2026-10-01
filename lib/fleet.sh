@@ -411,7 +411,7 @@ instances_list() {
 #
 # ⭐ Seven states, where a process count had two. Every extra state is one the
 #    predecessor could not see and therefore misreported:
-#      ARMED       heartbeat fresh, process alive            → reachable (T-457: OR a stale exit
+#      ARMED       heartbeat fresh, process alive            → reachable (OR a stale exit
 #                                                               record has since been superseded by
 #                                                               a fresh beat — see below, `alive` is
 #                                                               not required to agree in that case)
@@ -461,7 +461,7 @@ poller_state() {
     return 0
   fi
 
-  # ⛔⛔ T-457 — an exit record OLDER than the last beat means the exit was
+  # ⛔⛔ SUPERSEDED EXIT — an exit record OLDER than the last beat means the exit was
   #   SUPERSEDED: something has beaten since it was written. `alive`'s `kill -0`
   #   cannot be trusted as the tiebreaker here, because the `pid` this heartbeat
   #   file recorded may not belong to whatever is now doing the beating (a stale
@@ -491,7 +491,7 @@ poller_state() {
   fi
 
   # No exit record (or the exit was superseded but beat has ALSO gone stale
-  # since — see the T-457 branch above). Not parked. Is it beating?
+  # since — see the superseded-exit branch above). Not parked. Is it beating?
   local stale=$(( now - beat ))
   if (( alive == 1 && stale <= limit )); then
     # ⭐⭐⭐ WEDGED-SYNC (slice 2, fable's poll-persistent wedge design, 2026-09-22) — a
@@ -888,7 +888,7 @@ STALL_ALERT="${AIMAIL_STALL_ALERT:-1200}"
 source "$(dirname "${BASH_SOURCE[0]}")/pressure.sh"
 SWEEP_ALERT_DIR() { echo "$STATE_DIR/sweep_alerted"; }
 
-# ─── disk/worktree watchdog — T-804 (project owner, post disk-full incident, 2026-09-09) ──────
+# ─── disk/worktree watchdog (added after a disk-full incident, 2026-09-09) ──────
 # ⛔⛔ THE INCIDENT: root disk hit 96% full (18GB free of 457GB) this evening, found only
 #   because the project owner checked by hand -- nothing in this file's own sweep noticed,
 #   because nothing in this file WATCHED disk at all. Root cause: ~99GB in /tmp, almost all
@@ -1211,8 +1211,8 @@ _unowned_backlog_items() {
   local para="" last_disp="" d
   # the tool's verdicts, keyed by entry id; empty map -> mirror only (and one stderr line saying so)
   local -A tool_disp=(); local _tid _td tool_used=0
-  # ⚠ ONE ID, SEVERAL BLOCKS: on a real backlog file 113 ids headed more than one "### " block (T-513,
-  #   T-500, ...), and 70 of those have both open and resolved blocks. The tool's own per-id rule
+  # ⚠ ONE ID, SEVERAL BLOCKS: on a real backlog file 113 ids headed more than one "### " block (for
+  #   example the same task id appearing twice), and 70 of those have both open and resolved blocks. The tool's own per-id rule
   #   (the classifier's own sibling rule): an id is OPEN if ANY of its entries reads
   #   open. So "open" sticks; a later "resolved" line never overwrites it.
   if while IFS=$'\t' read -r _tid _td; do
@@ -1530,7 +1530,7 @@ fleet_sweep() {
   #   read as "0 findings" when it actually means "N findings, all explained".
   info "sweep: checked $n_checked seat(s), $n_alerts new alert(s), $n_suppressed suppressed by live-session evidence"
 
-  # T-804: same cron tick, same alert channel, a different population (disk/worktree bloat
+  # Disk/worktree watchdog: same cron tick, same alert channel, a different population (disk/worktree bloat
   # instead of seat health) -- a failure here must never abort the seat-health sweep above it.
   disk_worktree_sweep || warn "sweep: disk_worktree_sweep failed (non-fatal, seat sweep above already ran)"
 

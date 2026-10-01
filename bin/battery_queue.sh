@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # bin/battery_queue.sh -- the FIFO wait queue behind `run_canonical_battery.sh --wait <minutes>`
-# (T-762 §3.4, fable's test-throughput design 2026-09-21, built on assistant's 13:58 instruction
-# with main's own blocked FULL as the first live case).
+# (test-throughput design, 2026-09-21; the first live case was a blocked FULL run).
 #
 # WHY: the wrapper's guards REFUSE an over-budget or lock-held launch and the caller retries by
 # hand. 80 of 121 launches on 2026-09-21 were refusals, and the order of admission was "whoever
