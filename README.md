@@ -422,7 +422,7 @@ either direction. Only the automated park and ramp machinery acts on it.
 ```
 
 `autopilot` ramps if the block rolled, checkpoints `AIMAIL_CHECKPOINT_MIN`
-before the end, and parks at `AIMAIL_PARK_MIN`. It belongs in cron because a
+before the end, and parks only when the probed usage is at or over the account's cap. It belongs in cron because a
 background task is a child of the session and dies with it, which is the
 scenario unattended running exists to survive.
 
