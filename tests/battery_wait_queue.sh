@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/battery_wait_queue.sh -- the --wait FIFO queue (T-762 §3.4, 2026-09-21, fable).
+# tests/battery_wait_queue.sh -- the --wait FIFO queue of the battery wrapper.
 #
 # WHY: refuse-and-retry made admission "whoever retries fastest" and starved FULL runs. These
 # arms prove, with real files in a disposable queue dir and fake pids: FULL tickets sort ahead of

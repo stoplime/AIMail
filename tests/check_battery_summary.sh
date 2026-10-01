@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tests/check_battery_summary.sh -- check_battery_summary.sh's own tests.
 #
-# WHY: the acceptance owed by assistant's PROP-73 assignment (2026-09-18T10:02) is "a gate
-# recipe refuses a run with no summary file; refuses a summary whose worktree HEAD doesn't
-# match the requested tip" -- this proves both refusals fire, and that a genuine match passes,
+# WHY: the acceptance rule is "a gate recipe refuses a run with no summary file; refuses a
+# summary whose worktree HEAD doesn't match the requested tip" -- this proves both refusals fire,
+# and that a genuine match passes,
 # using real files in a disposable temp dir, matching this repo's own safe_sync.sh/
 # check_range_code_sha.sh test convention.
 set -uo pipefail
