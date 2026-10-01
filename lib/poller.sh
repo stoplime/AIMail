@@ -459,7 +459,8 @@ _poller_loop() {
     #    unclearable wake loop with no verb that can fix it, because the two
     #    predicates disagreed about what a message IS.
     local pending
-    pending=$( find "$MAIL_DIR/$seat" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l )
+    # A `--no-wake` notice is in the inbox but is not a reason to wake (it prints on the next real wake).
+    pending="$(mail_pending_wake_count "$seat")"
     if (( pending > 0 )); then
       echo "WAKE=mail: $pending message(s) for '$seat'."
       mail_deliver "$seat" "$maxb"
@@ -484,6 +485,8 @@ _poller_loop() {
     # ─── Heartbeat: the fleet-quiet safety net (see the comment above the loop) ─
     if (( heartbeat_sec > 0 )) && (( $(now_epoch) >= hb_deadline )); then
       echo "WAKE=heartbeat: no mail for ${heartbeat_sec}s — checking in anyway (fleet-quiet safety net, not a mail delivery)."
+      # Held no-wake notices ride this wake: shown in full, once, like any delivery.
+      if mail_has_held "$seat"; then mail_deliver "$seat" "$maxb"; fi
       echo "⛔ THIS IS NOT A NO-OP. The project owner's own words, direct: 'if you ignore it, I will fuck you up.' A quiet"
       echo "   inbox does not mean nothing to do. Before re-arming, actually check: gateclaim.sh --list"
       echo "   (any claim held far longer than the work it names should take?), whether anything you're"

@@ -70,6 +70,16 @@ aimail where <seat> <pattern>      # which state is a message in
 aimail ack <seat> <id>...          # archive what has been acted on
 ```
 
+**Notices that do not wake.** `aimail send ... --no-wake` delivers the mail into the inbox but the seat's
+poller does not wake the seat for it. The mail is printed in full, once, on the seat's next real wake (mail
+that does wake it, or a heartbeat), together with whatever else arrived; the shown-once and
+summary-until-acked rules are unchanged. `--wake` is the default and wins when given together with
+`--no-wake`. The tool's own automatic notices are sent this way: stale-ask alerts, budget crossing and
+warning mails, the balancer's pressure recommendation, the disk and idle-capacity sweep reports, the
+migration recommendation and the "move done" report. Alerts that need someone to act now still wake:
+checkpoint requests, migration handover requests, supervisor-unreachable, a seat that is stuck with mail
+waiting, crashed or wedged seats, memory pressure, a blind autopilot, announced moves with a cancel window.
+
 ### What `send` refuses, and why
 
 Every refusal replaces an incident. The tool enforces these rather than

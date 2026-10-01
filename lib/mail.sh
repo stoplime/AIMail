@@ -35,14 +35,22 @@
 
 mail_send() {
   local -a to=()
-  local from="" subject="" body_file="" allow_pronouns=0 force=0
+  local from="" subject="" body_file="" allow_pronouns=0 force=0 nowake=0 forcewake=0
 
   while (( $# )); do
     case "$1" in
       -h|--help)
-        info "usage: aimail send --to <seat> [--to <seat>...] --from <seat> --subject <s> --body-file <p>"
-        info "  Body may also arrive on stdin in place of --body-file. Nothing was sent."
+        info "usage: aimail send --to <seat> [--to <seat>...] --from <seat> --subject <s> --body-file <p> [--no-wake | --wake]"
+        info "  Body may also arrive on stdin in place of --body-file."
+        info "  --no-wake  deliver the mail but do not wake the seat for it: the seat's poller ignores it"
+        info "             until the seat wakes for another reason, then it is shown in full with the rest."
+        info "             Use it for notices that need no answer now. The tool's own automatic notices"
+        info "             (stale asks, budget crossings, sweep reports) are sent this way."
+        info "  --wake     the default; given together with --no-wake it wins (an explicit override)."
+        info "  Nothing was sent."
         exit 0 ;;
+      --no-wake)   nowake=1; shift ;;
+      --wake)      forcewake=1; shift ;;
       --to)        to+=("$2"); shift 2 ;;
       --from)      from="$2"; shift 2 ;;
       --subject)   subject="$2"; shift 2 ;;
@@ -325,6 +333,8 @@ mail_send() {
         printf 'subject: %s\n' "$subject"
         printf 'body-sha256: %s\n' "$sha"
         printf 'body-bytes: %s\n' "$bytes"
+        # A held notice: delivered, never a wake reason by itself (see mail_pending_wake_count).
+        (( nowake && ! forcewake )) && printf 'wake: no\n'
         (( ${#resolved[@]} > 1 )) && printf 'broadcast-to: %s\n' "$(IFS=,; echo "${resolved[*]}")"
         printf -- '---\n\n'
         cat "$body"
@@ -483,6 +493,36 @@ _recent_record() {
     printf '%s\t%s\t%s\n' "$id" "${from:-?}" "${subj:-(no subject)}"
   } | tail -n "$RECENT_MAX_LINES" > "$rf.tmp"
   mv -f "$rf.tmp" "$rf"
+}
+
+# ─── Which inbox mail wakes a seat ────────────────────────────────────────────
+# A notice sent with `--no-wake` carries a `wake: no` header line. It is delivered like any
+# other mail, but it is not a reason to wake the seat: the poller counts only the rest. It is
+# still in the inbox, so the next real wake (mail, heartbeat) prints it in full through
+# mail_deliver, under the same shown-once and summary rules as every other message.
+# Only the header block is read, so a body that happens to contain the same line is not a header.
+mail_is_nowake() {
+  awk 'NR==1 && $0!="---"{exit 1} NR>1 && $0=="---"{exit !f} $0=="wake: no"{f=1}' "$1" 2>/dev/null
+}
+
+# mail_pending_wake_count <seat> — regular inbox messages that justify a wake.
+mail_pending_wake_count() {
+  local seat="$1" f n=0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mail_is_nowake "$f" || n=$((n+1))
+  done < <(find "$MAIL_DIR/$seat" -maxdepth 1 -type f -name '*.md' 2>/dev/null)
+  echo "$n"
+}
+
+# mail_has_held <seat> — 0 when the inbox holds at least one no-wake notice.
+mail_has_held() {
+  local seat="$1" f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mail_is_nowake "$f" && return 0
+  done < <(find "$MAIL_DIR/$seat" -maxdepth 1 -type f -name '*.md' 2>/dev/null)
+  return 1
 }
 
 mail_deliver() {

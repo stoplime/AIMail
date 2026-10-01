@@ -1013,7 +1013,7 @@ disk_worktree_sweep() {
       printf 'No human asked for this -- the sweep found it unprompted.\n'
       printf 'Threshold: %sGB (this deployment'"'"'s own number, root-free floor and /tmp-used ceiling both).\n' "$DISK_ALERT_GB"
     } > "$body"
-    if mail_send --to "$supervisor" --from "$supervisor" \
+    if mail_send --to "$supervisor" --no-wake --from "$supervisor" \
          --subject "SWEEP: disk/worktree threshold crossed" --body-file "$body" >/dev/null 2>&1; then
       printf '%s' "$key" > "$marker"
     fi
@@ -1424,7 +1424,7 @@ idle_backlog_sweep() {
     local -a mail_to=(--to "$supervisor")
     [[ -n "${AIMAIL_SECONDARY_ALERT_SEAT:-}" ]] && seat_exists "$AIMAIL_SECONDARY_ALERT_SEAT" \
       && mail_to+=(--to "$AIMAIL_SECONDARY_ALERT_SEAT")
-    if mail_send "${mail_to[@]}" --from "$supervisor" \
+    if mail_send "${mail_to[@]}" --no-wake --from "$supervisor" \
          --subject "SWEEP: idle capacity + unowned backlog both present" --body-file "$body" >/dev/null 2>&1; then
       printf '%s' "$key" > "$marker"
     fi

@@ -440,7 +440,7 @@ _bal_alert() {
   } > "$body"
   local mrc=0
   # subshell: mail_send fails LOUD (exit) on an unwritable inbox (FI-61); the episode marker below must still be written
-  ( mail_send "${to[@]}" --from "$sup" --subject "BUDGET PRESSURE: $hot vs $cold, gap $gap -- balancer recommends one move (recommend-only)" --body-file "$body" ) >/dev/null 2>&1 || mrc=$?
+  ( mail_send "${to[@]}" --no-wake --from "$sup" --subject "BUDGET PRESSURE: $hot vs $cold, gap $gap -- balancer recommends one move (recommend-only)" --body-file "$body" ) >/dev/null 2>&1 || mrc=$?
   # one attempt per episode either way: a persistently failing mailbox must not turn into a mail every 5 min
   printf '%s' "$ep" > "$mf"
   (( mrc == 0 )) || printf '%s\t%s\tMAIL-FAILED rc=%s\t%s\n' "$now" "$(date -d "@$now" '+%F %H:%M' 2>/dev/null)" "$mrc" "recipients: ${to[*]}" >> "$(BALANCE_DIR)/alerts.log"

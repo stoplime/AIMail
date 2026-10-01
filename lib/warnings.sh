@@ -191,7 +191,7 @@ _warn_mail() {
     printf 'One mail per (account, gauge, level, window). aimail budget warnings prints the live table; aimail placement <seat> the target for a move.\n'
   } > "$body"
   local mrc=0
-  ( mail_send "${to[@]}" --from "$sup" --subject "BUDGET CROSSING: $1" --body-file "$body" ) >/dev/null 2>&1 || mrc=$?
+  ( mail_send "${to[@]}" --no-wake --from "$sup" --subject "BUDGET CROSSING: $1" --body-file "$body" ) >/dev/null 2>&1 || mrc=$?
   (( mrc == 0 )) || printf '%s\tMAIL-FAILED rc=%s\t%s\n' "$(date +%s)" "$mrc" "recipients: ${to[*]}" >> "$(WARN_DIR)/warnings.log"
   rm -f "$body"
 }

@@ -55,6 +55,8 @@ SEATS (the address space — a name is only an address if it is registered)
 MAIL
   aimail send --to <seat> [--to <seat>…] --from <seat> --subject <s> --body-file <p>
   aimail send … < body.md                   body may also arrive on stdin
+  aimail send … --no-wake                   deliver, but do not wake the seat for it: shown in full
+                                             on the seat's next real wake (--wake overrides)
   aimail ack <seat> --all | <id>…           acted on it → archive it
                                              --all requires a MATCHING, RECENT
                                              'deliver' (AIMAIL_ACK_TTL, default

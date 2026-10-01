@@ -192,7 +192,7 @@ seat_budget_move() {
   } > "$body"
   local rcpt; for rcpt in "$from" "${AIMAIL_HUMAN_ALERT_SEAT:-}"; do
     [[ -n "$rcpt" ]] && seat_exists "$rcpt" || continue
-    mail_send --to "$rcpt" --from "$rcpt" --subject "WEEKLY-CAP MOVE DONE: $seat -> ${new:0:8} on $target (old ${old:0:8} $( (( is_sup )) && printf 'kept alive off aimail' || printf stopped))" --body-file "$body" >/dev/null 2>&1 || true
+    mail_send --to "$rcpt" --no-wake --from "$rcpt" --subject "WEEKLY-CAP MOVE DONE: $seat -> ${new:0:8} on $target (old ${old:0:8} $( (( is_sup )) && printf 'kept alive off aimail' || printf stopped))" --body-file "$body" >/dev/null 2>&1 || true
   done
   [[ -n "${AIMAIL_OWNER_INBOX:-}" ]] && printf '%s  %s weekly-cap move: new session %s on %s (model %s); old %s on %s %s\n' "$(now_iso)" "$seat" "$new" "$target" "$pin" "${old:0:8}" "$cur" "$( (( is_sup )) && printf 'kept alive off aimail' || printf stopped)" >> "$AIMAIL_OWNER_INBOX" 2>/dev/null || true
   rm -f "$body"

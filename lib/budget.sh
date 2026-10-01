@@ -1327,7 +1327,7 @@ budget_recommend_migration() {
       printf '  claude agents --json and the seat record; a session id is never asserted with certainty here.\n'
     fi
   } > "$body"
-  mail_send --to "$supervisor" --from "$supervisor" \
+  mail_send --to "$supervisor" --no-wake --from "$supervisor" \
     --subject "Migration recommendation: $seat ($cur_acct -> $target, at/over cap)" \
     --body-file "$body" >/dev/null 2>&1 \
     || warn "budget_recommend_migration: could not mail '$supervisor' -- the marker is written regardless, see $rfile"
@@ -2357,7 +2357,7 @@ budget_watch() {
             printf 'No human asked for this reading specifically — budget watch found it, polling every %ss.\n' "$interval"
             printf 'Run `aimail budget seat-check %s` to confirm current state before acting.\n' "$seat"
           } > "$body"
-          if seat_exists "$supervisor" && mail_send --to "$supervisor" --from "$supervisor" \
+          if seat_exists "$supervisor" && mail_send --to "$supervisor" --no-wake --from "$supervisor" \
                --subject "BUDGET: $seat crossed its cap (${reason:-session} ${pct:-?}%)" --body-file "$body" >/dev/null 2>&1; then
             touch "$marker"
           else

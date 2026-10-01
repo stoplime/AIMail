@@ -4628,6 +4628,19 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/review.sh produced no summary line (rc=$RV_RC)")
 fi
 
+section "no-wake notices — tests/no_wake.sh (standalone script, folded in)"
+NW_OUT="$(bash "$REPO/tests/no_wake.sh" 2>&1)"; NW_RC=$?
+printf '%s\n' "$NW_OUT" | sed 's/^/  /'
+_nw_nums="$(printf '%s\n' "$NW_OUT" | grep -oE 'no_wake: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+NW_PASS="$(sed -n '1p' <<<"$_nw_nums")"
+NW_FAIL="$(sed -n '2p' <<<"$_nw_nums")"
+if [[ -n "$NW_PASS" && -n "$NW_FAIL" ]]; then
+  PASS=$((PASS+NW_PASS)); FAIL=$((FAIL+NW_FAIL))
+  (( NW_FAIL == 0 && NW_RC == 0 )) || FAILURES+=("tests/no_wake.sh reported $NW_FAIL failure(s), rc=$NW_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/no_wake.sh produced no summary line (rc=$NW_RC)")
+fi
+
 section "doctor"
 # doctor checks the real tree's git hooks, which the throwaway copy $AIMAIL points at does not have
 AIMAIL="$REPO/bin/aimail" accepts "doctor runs"  -- doctor

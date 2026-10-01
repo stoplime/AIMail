@@ -580,7 +580,7 @@ _ask_sweep_locked() {
         "$id" "$(_ask_fmt_age "$age")" "$(_ask_fmt_age "$stale")" "$(_ask_field "$row" 4)" "$owner" "$(_ask_field "$row" 5)" \
         "${row:+$(_ask_field "$row" 11)}" "$(_ask_field "$row" 12)" "$id" "$owner" "$id" > "$body"
       local -a to=(--to "$owner"); [[ "$owner" != "$supervisor" ]] && to+=(--to "$supervisor")
-      if mail_send "${to[@]}" --from "$supervisor" --subject "STALE ask $id: $(_ask_field "$row" 4 | head -c 60)" --body-file "$body" >/dev/null 2>&1; then
+      if mail_send "${to[@]}" --no-wake --from "$supervisor" --subject "STALE ask $id: $(_ask_field "$row" 4 | head -c 60)" --body-file "$body" >/dev/null 2>&1; then
         _ask_rewrite "$id" '$15=now'; mailed_n=$((mailed_n+1))
       else
         warn "ask $id: stale mail could not be sent (will retry next sweep)"
