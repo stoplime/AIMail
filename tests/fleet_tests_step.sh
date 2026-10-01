@@ -61,6 +61,12 @@ mkdir -p "$TMP/none"
 out=$(run_step "$TMP/none"); chk "no runner -> EXIT=0" "$(echo "$out" | grep -o 'EXIT=[0-9]*' | head -1)" "EXIT=0"
 chk "the skip says it did not run" "$(echo "$out" | grep -c 'not run')" "1"
 
+echo "── ARM 4a: a workspace the caller named explicitly, with no runner -- must FAIL, not skip ──"
+out=$( PLATFORM_ROOT="$TMP/none/platform" FLEET_WORKSPACE="$TMP/none" FLEET_WORKSPACE_EXPLICIT=yes WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)
+       source "$START"; source "$COLLECT"; echo "EXIT=$FLEET_TESTS_EXIT DESC=$FLEET_TESTS_DESC" )
+chk "explicit workspace, no runner -> EXIT=1" "$(echo "$out" | grep -o 'EXIT=[0-9]*' | head -1)" "EXIT=1"
+chk "the failure says it was refused" "$(echo "$out" | grep -c 'REFUSED')" "1"
+
 echo "── ARM 4b: the runner runs ALONGSIDE the caller's work, not after it ──"
 mkhub slow 'sleep 3; echo "Ran 5 tests in 3s"; exit 0'
 elapsed=$( PLATFORM_ROOT="$TMP/slow/platform" FLEET_WORKSPACE="$TMP/slow" WORKTREE="$TMP" SEAT=t TS=0 CONDA_PY=bash POC_ROOT=/nowhere ENV_ASSIGNMENTS=(X=1)

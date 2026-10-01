@@ -744,6 +744,8 @@ echo "▶ running canonical battery ($GATE) ... (log: $LOG)"
 battery_scope_prefix
 summ "▶ resource cap:    ${BATTERY_PREFIX[*]}${BATTERY_SCOPE_NOTE:+  (⚠ $BATTERY_SCOPE_NOTE)}"
 # The fleet's own files live in their own repo next to the Platform checkout, not in the Platform's zignore repo.
+# Set explicitly by the caller: a missing runner is then a failure, not a skip (see the collect step).
+FLEET_WORKSPACE_EXPLICIT="${FLEET_WORKSPACE:+yes}"
 FLEET_WORKSPACE="${FLEET_WORKSPACE:-$(dirname "$PLATFORM_ROOT")/fleet-workspace}"
 FLEET_RUNNER="$FLEET_WORKSPACE/fleet_tests/run_fleet_tests.py"
 FLEET_PID=""
@@ -807,6 +809,9 @@ if [ -n "$FLEET_PID" ]; then
     # No Ran line, or "Ran 0 tests", means the runner never reached the tests: a refusal, not a pass.
     fleet_ran_count="$(echo "$fleet_ran_line" | grep -oE '^Ran [0-9]+' | grep -oE '[0-9]+')"
     [ "${fleet_ran_count:-0}" -eq 0 ] && FLEET_TESTS_EXIT=1
+elif [ -n "${FLEET_WORKSPACE_EXPLICIT:-}" ]; then
+    FLEET_TESTS_EXIT=1
+    FLEET_TESTS_DESC="REFUSED: FLEET_WORKSPACE is set but $FLEET_RUNNER does not exist"
 fi
 
 RAN_LINE="$(grep -E '^Ran [0-9]+ tests? in' "$LOG" | tail -1)"
