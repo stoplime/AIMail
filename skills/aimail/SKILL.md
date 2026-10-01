@@ -16,15 +16,15 @@ violated.
 
 ## Critical rules — violating these has broken the fleet before
 
-- **Never hand the owner a push command, or call a branch ready, except through `aimail review handoff`.** It is
+- **Never hand a person a push command, or call a branch ready, except through `aimail review handoff`.** It is
   the one path that checks the ledger for the branch's exact current commit. A push command typed by hand into a
   reply has skipped the check, however sure the seat is.
 - **A review reported only by mail is not an approval.** A seat that says "GREEN", "approved" or
   "passes" about a branch headed for a PR, in a mail or a reply, has approved nothing: an approval is a row
   written by `aimail review approve <sha>`. The receiving seat replies asking for that command, and does not
-  act on the result (no landing, no handoff to the owner) until `aimail review status <repo> <branch>` reads
+  act on the result (no landing, no handoff to a person) until `aimail review status <repo> <branch>` reads
   `approved` for the branch's current commit. This binds the orchestrator too: nothing a mail calls GREEN
-  goes to the owner unless the status says approved. A new commit makes the old approval `stale`.
+  goes to a person unless the status says approved. A new commit makes the old approval `stale`.
 
 - **Never `kill <pid>` a seat's Claude session; never migrate a seat by hand.**
   The CLI's background-job scheduler tracks every `claude --bg` session against
@@ -185,7 +185,7 @@ workarounds); **B** root cause for a fix (named and shown, removed not patched, 
 reviewer did not write the code, exact commit).
 
 Two things ask the same question ("is this exact sha approved?") and neither reads any text:
-- `aimail review handoff <repo> <branch>` is the only way to give the owner a push. It refuses unless the
+- `aimail review handoff <repo> <branch>` is the only way to give a person a push. It refuses unless the
   branch's current sha is approved; on success it prints the push command and the PR description path from the
   record and logs the handoff.
 - `hooks/review_prepush_guard.sh` is the last resort at push; `PR_READY_OVERRIDE="<reason>"` gets past it and
