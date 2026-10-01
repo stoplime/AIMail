@@ -2210,6 +2210,47 @@ else
 fi
 rm -f "$AIMAIL_ROOT/state/budget_ledger.tsv"
 
+section "budget pool — LEFT and BLOCK-RESET columns: each account's own block, time left as XhYYm"
+# Fixed clock (AIMAIL_NOW) and per-account cached block files, so the columns are exact and no
+# ccusage or network is involved. Expected clock times are computed with `date` the same way the
+# column does, so the arms hold in any timezone.
+mkdir -p "$AIMAIL_ROOT/state"
+BR_NOW=1800000000
+_br_block_json() { # <end-epoch> -> ccusage-shaped JSON with one active block ending then
+  printf '{"blocks":[{"isActive":true,"startTime":"%s","endTime":"%s","totalTokens":1,"costUSD":0,"burnRate":{"tokensPerMinuteForIndicator":0}}]}\n' \
+    "$(date -u -d "@$(( $1 - 18000 ))" '+%Y-%m-%dT%H:%M:%S.000Z')" "$(date -u -d "@$1" '+%Y-%m-%dT%H:%M:%S.000Z')"
+}
+# account : minutes left (empty = no cache file at all; negative = block already over)
+BR_CASES="brlong:134 brshort:45 brzero:0 brpast:-10 brnone:"
+for _c in $BR_CASES; do
+  _a="${_c%%:*}"; _m="${_c#*:}"; rm -f "$AIMAIL_ROOT/state/block.$_a.json"
+  [[ -n "$_m" ]] && _br_block_json $(( BR_NOW + _m*60 )) > "$AIMAIL_ROOT/state/block.$_a.json"
+done
+AIMAIL_NOW="$BR_NOW" AIMAIL_FLEET_ACCOUNTS="brlong brshort brzero brpast brnone" "$AIMAIL" budget pool > "$AIMAIL_ROOT/.pool_br" 2> "$AIMAIL_ROOT/.pool_br_err" || true
+# _br_cells <account> -> "LEFT BLOCK-RESET" for that row (columns right after SESSION%/CAP)
+# (rows after the pool header only: the placement report above it lists the same account names)
+_br_cells() { awk -v a="$1" '/^ACCOUNT +PARKED/ {on=1; next} on && $1==a { print $4 " " $5; exit }' "$AIMAIL_ROOT/.pool_br"; }
+_br_check() { # <desc> <account> <expected cells>
+  local got; got="$(_br_cells "$2")"
+  if [[ "$got" == "$3" ]]; then PASS=$((PASS+1)); printf '  ✔ %s (%s)\n' "$1" "$3"
+  else FAIL=$((FAIL+1)); FAILURES+=("pool LEFT/BLOCK-RESET: $1 -- wanted '$3', got '$got'")
+       printf '  ✖ %s -- wanted %s, got %s\n' "$1" "'$3'" "'$got'"
+       sed 's/^/      /' "$AIMAIL_ROOT/.pool_br"; sed 's/^/      ! /' "$AIMAIL_ROOT/.pool_br_err"; fi
+}
+_br_hm() { date -d "@$(( BR_NOW + $1*60 ))" '+%H:%M'; }
+if grep -qE '^ACCOUNT +PARKED +SESSION%/CAP +LEFT +BLOCK-RESET +WEEKLY%/CAP' "$AIMAIL_ROOT/.pool_br"; then
+  PASS=$((PASS+1)); printf '  ✔ LEFT and BLOCK-RESET sit beside SESSION%%/CAP; the other columns are still there\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("pool LEFT/BLOCK-RESET: header layout wrong")
+  sed 's/^/      /' "$AIMAIL_ROOT/.pool_br"
+fi
+_br_check "over an hour left reads hours and minutes" brlong  "2h14m $(_br_hm 134)"
+_br_check "under an hour left reads 0hMMm"            brshort "0h45m $(_br_hm 45)"
+_br_check "exactly zero left is a real 0h00m"         brzero  "0h00m $(_br_hm 0)"
+_br_check "an unmeasured block (no data) reads '?' for both" brnone "? ?"
+_br_check "a block already over (stale data) reads '?' for both, not negative" brpast "? ?"
+for _c in $BR_CASES; do rm -f "$AIMAIL_ROOT/state/block.${_c%%:*}.json"; done
+
 section "budget — _configured_account_pool: explicit-list only, realpath dedupe, seat fallback, empty-pool failure"
 # ⛔ 2026-09-25: budget_pool / _pl_accounts / _instance_account_dirs each independently fell
 #   back to a seat-only list when AIMAIL_FLEET_ACCOUNTS was unset -- a genuinely seatless

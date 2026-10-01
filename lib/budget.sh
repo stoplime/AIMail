@@ -75,7 +75,7 @@
 #   for whichever account is currently in scope. Filename changes on upgrade
 #   (old `block.json` is simply orphaned, not migrated) -- a one-time cold
 #   cache on the first tick after deploying, harmless.
-BUDGET_CACHE() { echo "$STATE_DIR/block.$(account_id).json"; }
+BUDGET_CACHE() { echo "$STATE_DIR/block.${1:-$(account_id)}.json"; }
 BUDGET_CACHE_TTL="${AIMAIL_BLOCK_TTL:-60}"
 CHECKPOINT_MIN="${AIMAIL_CHECKPOINT_MIN:-45}"   # write ROLE.md this many minutes before block end
 # CALLOUT_FRESH_MIN — how recently a callout/probe must have been TAKEN (its
@@ -251,7 +251,15 @@ weekly_cap() {
 #    fall back to a guess. "Unmeasurable" and "zero" are different claims, and
 #    zero reads as safe in whichever direction happens to be dangerous — a 0%
 #    burn rate was once read as "the fleet is idle, poke it".
+# block_json [account] — with an account argument it is a pure read of THAT account's own cached
+# block (any age, never a live ccusage call: ccusage reads this machine's transcripts, which say
+# nothing reliable about another account). No cache file -> unmeasured, exit 1.
 block_json() {
+  if [[ -n "${1:-}" ]]; then
+    local c; c="$(BUDGET_CACHE "$1")"
+    [[ -s "$c" ]] && { cat "$c"; return 0; }
+    return 1
+  fi
   local cache; cache="$(BUDGET_CACHE)"
   if [[ -f "$cache" ]]; then
     local age=$(( $(now_epoch) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
@@ -278,9 +286,9 @@ block_json() {
   rm -f "$tmp"; return 1
 }
 
-# block_field <key> — start|end|remaining_min|tokens|cost|burn_per_min
+# block_field <key> [account] — start|end|remaining_min|tokens|cost|burn_per_min
 block_field() {
-  block_json 2>/dev/null | python3 -c "
+  block_json "${2:-}" 2>/dev/null | python3 -c "
 import json,sys,datetime
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(4)
@@ -907,9 +915,10 @@ budget_pool() {
   echo
   source "${BASH_SOURCE[0]%/*}/placement.sh" 2>/dev/null || true
   if command -v placement_report >/dev/null 2>&1; then placement_report || true; echo; fi
-  printf '%-10s  %-8s  %-16s  %-16s  %-16s  %-10s  %s\n' \
-    "ACCOUNT" "PARKED" "SESSION%/CAP" "WEEKLY%/CAP" "FABLE-WKLY%" "RESETS" "SEATS"
-  local acct sc lc lc_p wc wl wl_p fw fw_p parked resets seats
+  printf '%-10s  %-8s  %-16s  %-8s  %-11s  %-16s  %-16s  %-10s  %s\n' \
+    "ACCOUNT" "PARKED" "SESSION%/CAP" "LEFT" "BLOCK-RESET" "WEEKLY%/CAP" "FABLE-WKLY%" "RESETS" "SEATS"
+  local pool_now="${AIMAIL_NOW:-$(now_epoch)}"
+  local acct sc lc lc_p wc wl wl_p fw fw_p parked resets seats blk be left
   for acct in "${accts[@]}"; do
     sc="$(account_cap "$acct")"; wc="$(weekly_cap "$acct")"
     lc="$(_last_callout "$acct" 2>/dev/null || true)"
@@ -925,14 +934,27 @@ budget_pool() {
     fw_p="$( [[ -n "$fw" ]] && cut -f2 <<<"$fw" || echo '?' )"
     if [[ -f "$(THROTTLE_FLAG "$acct")" ]]; then parked="yes"; else parked="no"; fi
     seats="${seats_by_acct[$acct]:-(none live)}"
-    printf '%-10s  %-8s  %-16s  %-16s  %-16s  %-10s  %s\n' \
-      "$acct" "$parked" "${lc_p}%/${sc}%" "${wl_p}%/${wc}%" "${fw_p}%" "$resets" "$seats"
+    # This account's own 5-hour block: time left (XhYYm) and the local clock time it resets, from the
+    # same block data `aimail budget block` reads, but this account's cached copy. '?' for both when
+    # there is none, it is unreadable, or the end is already past (a stale cache) -- never 0 and never
+    # an invented time. A block ending exactly now is a real "0h00m".
+    left="?"; blk="?"
+    be="$(block_field end "$acct" 2>/dev/null || true)"
+    if [[ "$be" =~ ^[0-9]+$ ]] && (( be >= pool_now )); then
+      local mins=$(( (be - pool_now) / 60 ))
+      left="$(printf '%dh%02dm' $(( mins / 60 )) $(( mins % 60 )))"
+      blk="$(date -d "@$be" '+%H:%M')"
+    fi
+    printf '%-10s  %-8s  %-16s  %-8s  %-11s  %-16s  %-16s  %-10s  %s\n' \
+      "$acct" "$parked" "${lc_p}%/${sc}%" "$left" "$blk" "${wl_p}%/${wc}%" "${fw_p}%" "$resets" "$seats"
   done
   echo
   info "'?' means UNMEASURED for that account (no reading yet, or the account has never been probed"
   info "from this machine) — never read as 0%. FABLE-WKLY is a separate ceiling from the account's"
   info "own weekly cap (see budget_probe's own extraction note); '?' there can also mean the live"
   info "response simply had no Fable-scoped entry, which is a real, distinct case from unmeasured."
+  info "LEFT is the time left in the account's own 5-hour block (XhYYm) and BLOCK-RESET its local reset"
+  info "time (HH:MM); '?' for both means the block is unmeasured or already past (no fresh cached block)."
 }
 
 # ─── Pick — the allocation policy (2026-09-20, item 3) ────────────────────────
