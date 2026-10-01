@@ -645,7 +645,7 @@ section "show — AR-25: a body shown somewhere unread must still be recoverable
 #   calling session's context. A seat notified the task finished, who then reads only
 #   the documented path (`aimail deliver <seat>`), got a one-line summary — the message
 #   was genuinely SHOWN (bytes left the process), just never to a reader who was there.
-#   MEASURED: a T-391 gate approval and an authoring notice both lost this way, recovered
+#   MEASURED: a gate approval and an authoring notice were both lost this way, recovered
 #   only by reading unacked/*.md off disk by hand — not a documented command.
 accepts "register a seat for the show recovery path" -- seat add showseat "recovery guard"
 printf 'the body that must remain recoverable\n' > "$AIMAIL_ROOT/showbody.md"
@@ -877,7 +877,7 @@ _hb main pid=$$ started=$((NOW-9000)) beat=$((NOW-9000)) park_beat=$((NOW-9000))
 _fleet_says main "WEDGED" "a stale park heartbeat still alarms — parking once does not mask a later hang"
 rm -f "$AIMAIL_ROOT/state/poller/main.hb"
 
-# ⛔⛔ T-457 — a FRESH beat NEWER than a stale exit_at, with a `pid` that fails
+# ⛔⛔ A FRESH beat NEWER than a stale exit_at, with a `pid` that fails
 #   `kill -0` (the exact shape measured live: exit_at=1787500677 beat=1787500884,
 #   a 207s gap, alongside a CONFIRMED-alive poller process whose pid the
 #   heartbeat file did not happen to record). The predecessor required `alive`
@@ -4002,7 +4002,7 @@ section "main_only_landing_guard — enforcement selftest in-suite (per-repo/per
 # nothing on its own -- assert the rc AND an expected arm count, never a tally of printed
 # lines. This is the ENFORCEMENT logic itself (does a non-allowed seat actually get
 # refused on a protected ref); the landing_guard section right below is a DIFFERENT
-# concern (is the hook still resolvable at all, t908) -- both matter, neither substitutes
+# concern (is the hook still resolvable at all) -- both matter, neither substitutes
 # for the other.
 MOLG_EXPECTED_ARMS=23
 MOLG="$(bash "$REPO/hooks/main_only_landing_guard.sh" selftest 2>&1)"; MOLG_RC=$?
@@ -4026,7 +4026,7 @@ else
   printf '  ✖ main_only_landing_guard selftest ran %s arms, expected %s — a silently-dropped arm passes for free\n' "$MOLG_ARMS" "$MOLG_EXPECTED_ARMS"
 fi
 
-section "landing_guard — resolvability check selftest in-suite (t908: a dangling hook must read red)"
+section "landing_guard — resolvability check selftest in-suite (a dangling hook must read red)"
 # Same lesson as stop_guard/supervisor_guard above: a selftest outside the suite proves
 # nothing on its own. Drive it as a real subprocess, assert its own tally AND its exit.
 LG="$(bash "$AIMAIL" landing-guard --selftest 2>&1)"; LG_RC=$?
@@ -4257,7 +4257,7 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("hooks/ mode check: not tracked 100755: $STER_MODE_BAD")
 fi
 
-section "placement — T-917: pinned / precious / fable headroom / spread / projected, on today's 6-on-one incident"
+section "placement — pinned / precious / fable headroom / spread / projected, on today's 6-on-one incident"
 # ⛔ Pure decision functions over synthetic state (weekly files, ledger rows, park flags, a seat map),
 #   the same discipline as the budget_pick_account arms above. The scenario IS 2026-09-22 16:55:
 #   six non-pinned seats on one account crossing 80% while another account sits at 8%.
@@ -4352,7 +4352,7 @@ _pl_reset; unset AIMAIL_PLACEMENT_SEATS AIMAIL_PRECIOUS_ACCOUNT AIMAIL_FABLE_SEA
 export AIMAIL_FLEET_ACCOUNTS=""
 
 
-section "act — T-917 item 4: announce-then-do, one seat per tick, never mid-turn, never pinned, cancel, defer, abandon, failed"
+section "act — announce-then-do, one seat per tick, never mid-turn, never pinned, cancel, defer, abandon, failed"
 source "$REPO/lib/core.sh"; source "$REPO/lib/budget.sh"; source "$REPO/lib/fleet.sh"; source "$REPO/lib/balance.sh"; source "$REPO/lib/placement.sh"; source "$REPO/lib/act.sh"
 ACTFAKE="$AIMAIL_ROOT/act_fake_migrate.sh"; ACTCALLS="$AIMAIL_ROOT/act_calls"
 cat > "$ACTFAKE" <<'FM'
@@ -4429,7 +4429,7 @@ _act_reset; export AIMAIL_BALANCE_LIVE_STATE="acs1=mid acs2=mid acs3=mid acsup=i
 _acchk "every seat on the hot account is mid-turn -> NO-CANDIDATE (never a mid-turn move)" "$([[ -f "$(ACT_INTENT)" ]] && echo intent || echo none)|$(grep -c $'\tNO-CANDIDATE\tacr2' "$(ACT_LOG)")" "none|1"
 unset AIMAIL_NOW ACT_FAIL AIMAIL_BALANCE_ACT AIMAIL_BALANCE_ACT_LEVEL AIMAIL_BALANCE_ACT_DELAY_MIN AIMAIL_BALANCE_MIGRATE_CMD ACT_CALLS AIMAIL_BALANCE_LIVE_STATE AIMAIL_FLEET_ACCOUNTS AIMAIL_SUPERVISOR AIMAIL_VICE_SUPERVISOR AIMAIL_PINNED_SEATS AIMAIL_HUMAN_ALERT_SEAT AIMAIL_PRECIOUS_ACCOUNT AIMAIL_PLACEMENT_SEATS AIMAIL_FABLE_SEAT
 
-section "warnings — T-917 item 3: 50/80 crossings on block / weekly / fable-model, one mail per window, projected cap-hit"
+section "warnings — 50/80 crossings on block / weekly / fable-model, one mail per window, projected cap-hit"
 source "$REPO/lib/core.sh"; source "$REPO/lib/budget.sh"; source "$REPO/lib/placement.sh"; source "$REPO/lib/warnings.sh"
 _wn_reset() {
   rm -rf "$AIMAIL_ROOT/state/warnings"; rm -f "$AIMAIL_ROOT"/state/weekly_wn* "$AIMAIL_ROOT"/state/fable_weekly_wn* "$AIMAIL_ROOT"/mail/wnsup/*.md 2>/dev/null

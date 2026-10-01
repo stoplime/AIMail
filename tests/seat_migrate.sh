@@ -678,7 +678,7 @@ chk_contains "…names the set" "$out" "AIMAIL_PINNED_SEATS"
 seed_transcript "$ACCT_B" "$PRIOR"   # so the only possible refusal left is the pinned one
 out="$(AIMAIL_PINNED_SEATS="super" "$AIMAIL" seat migrate vice alpha --from super --model m --handover-wait 0 --dry-run 2>&1)"; rc=$?
 chk "…a seat NOT in AIMAIL_PINNED_SEATS is not refused on that ground (dry-run exit 0)" "$rc" 0
-# 8.9 placement rule at the migrate level (T-917): alpha is the supervisor's (precious) account, beta has headroom -> a move of seat-a onto alpha is refused before the handover
+# 8.9 placement rule at the migrate level: alpha is the supervisor's (precious) account, beta has headroom -> a move of seat-a onto alpha is refused before the handover
 sup_reset; write_instance seat-a "$SID" acct-b; write_agents "$ACCT_B" "$SID"; seed_transcript "$ACCT_B" "$SID"
 # ⚠ ONE WORD PER ACCOUNT: this suite calls the accounts alpha/beta (AIMAIL_FLEET_ACCOUNTS, the migrate
 #   target), so its readings, roster and precious marker use the SAME words -- WEEKLY_FILE alpha, ledger

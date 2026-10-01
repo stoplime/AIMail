@@ -202,7 +202,7 @@ for pair in "$S_AS 0 5000" "$SID_A 0 3000" "$SID_B 0 1000" "$SID_C 0 200"; do se
   printf '%s\talpha\t%s\t%s\tmodel-m\t%s\t0\t0\t0\t0\n' "$NOW" "$(_bal_sid_to_seat "$1")" "$1" "$3" >> "$(SEAT_USAGE_LEDGER)"
 done
 export AIMAIL_BALANCE_LIVE_STATE="assistant=idle seat-a=mid seat-b=idle seat-c=idle" AIMAIL_SUPERVISOR=assistant
-# T-917: the recommendation's TARGET now comes from the placement rules, which need the target's own
+# The recommendation's TARGET now comes from the placement rules, which need the target's own
 # WEEKLY reading (block may be unmeasured); the pressure series alone was enough before. alpha hot
 # (60%), beta cold (10%) -- the same shape section 3 used.
 printf '%s\t60\t%s\n' "$AIMAIL_NOW" $((AIMAIL_NOW+24*3600)) > "$(WEEKLY_FILE alpha)"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/safe_sync.sh — the refuse-loudly guard's own dirty-detection.
 #
-# WHY: 2026-08-31, T-313 — a bare `git checkout <ref> -- <path>` silently destroyed
+# WHY: a bare `git checkout <ref> -- <path>` silently destroyed
 # an out-of-protocol uncommitted edit during a protocol-compliant landing's own sync
 # step. `bin/safe_sync.sh` exists to make that class of loss impossible without a
 # human decision in between. This file proves it actually refuses (⑤ exit codes

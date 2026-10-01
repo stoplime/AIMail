@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/check_range_code_sha.sh — the code_sha-over-every-JSON range guard's own tests.
 #
-# WHY: fable's own manual code_sha sweep (2026-09-18, T-882 step 8) found a9ec29542's
+# WHY: a manual code_sha sweep found a9ec29542's
 # corpus-manifest JSON carrying a pre-rebase code_sha, by hand -- named as a gap the
 # existing probe-only pre-ff check didn't cover mechanically. bin/check_range_code_sha.py
 # is that mechanical widening; this file proves it actually refuses a real mismatch,

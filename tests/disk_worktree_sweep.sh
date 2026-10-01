@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/disk_worktree_sweep.sh — T-804: the disk-space/stale-worktree watchdog folded into
-# fleet_sweep(), and PROP-fable-40's occupancy-detector broadening.
+# tests/disk_worktree_sweep.sh — the disk-space/stale-worktree watchdog folded into
+# fleet_sweep(), and the broadening of its occupancy detector.
 #
 # Follows tests/run.sh's evidence rules: every rejection/finding arm is paired with a clean
 # control (③), exit codes captured out of pipes (⑤), denominator printed (④).
