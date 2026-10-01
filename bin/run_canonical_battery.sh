@@ -743,11 +743,15 @@ echo "▶ running canonical battery ($GATE) ... (log: $LOG)"
 # The result is collected below, where the step used to run; nothing about its verdict changes.
 battery_scope_prefix
 summ "▶ resource cap:    ${BATTERY_PREFIX[*]}${BATTERY_SCOPE_NOTE:+  (⚠ $BATTERY_SCOPE_NOTE)}"
-FLEET_RUNNER="$PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py"
+# The fleet's own files live in their own repo next to the Platform checkout, not in the Platform's zignore repo.
+# Set explicitly by the caller: a missing runner is then a failure, not a skip (see the collect step).
+FLEET_WORKSPACE_EXPLICIT="${FLEET_WORKSPACE:+yes}"
+FLEET_WORKSPACE="${FLEET_WORKSPACE:-$(dirname "$PLATFORM_ROOT")/fleet-workspace}"
+FLEET_RUNNER="$FLEET_WORKSPACE/fleet_tests/run_fleet_tests.py"
 FLEET_PID=""
 FLEET_LOG="/tmp/canonical_battery_fleet_${SEAT}_${TS}.log"
 if [ -f "$FLEET_RUNNER" ]; then
-    ( cd "$WORKTREE" && ${BATTERY_PREFIX[@]+"${BATTERY_PREFIX[@]}"} env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" \
+    ( cd "$WORKTREE" && ${BATTERY_PREFIX[@]+"${BATTERY_PREFIX[@]}"} env "${ENV_ASSIGNMENTS[@]}" SENTRY_DSN='' TAKEOFF_POC_ROOT="$POC_ROOT" PLATFORM_ROOT="$PLATFORM_ROOT" \
         "$CONDA_PY" "$FLEET_RUNNER" --checkout "$WORKTREE" --fast --jobs 4 ) > "$FLEET_LOG" 2>&1 &
     FLEET_PID=$!
 fi
@@ -789,14 +793,14 @@ fi
 # (mocked, no sharedcorpus) does not supply.
 
 # FLEET TESTS (2026-09-29): the guard-style tests that police our own tooling live in the
-# zignore repo (zignore/fleet_tests), not in Platform, so coworkers' CI never runs them -- but the
+# fleet workspace repo (fleet-workspace/fleet_tests), not in Platform, so coworkers' CI never runs them -- but the
 # fleet still needs them or they protect nothing. Run here, in BOTH gates, against this worktree:
 # run_fleet_tests.py builds a throwaway tree around $WORKTREE (nothing is written into it) and
 # `--fast` leaves out the ~450 s probe-compile module (a probe edit, not a Platform edit, is what
 # that one checks; run it without --fast after touching a probe). Measured 122 s to 202 s (under load), and it is
 # added to EVERY gate, fast and full. Skipped, said so, when the hub has no fleet_tests directory.
 FLEET_TESTS_EXIT=0
-FLEET_TESTS_DESC="not run (no $PLATFORM_ROOT/zignore/fleet_tests/run_fleet_tests.py)"
+FLEET_TESTS_DESC="not run (no $FLEET_RUNNER)"
 if [ -n "$FLEET_PID" ]; then
     wait "$FLEET_PID"
     FLEET_TESTS_EXIT=$?
@@ -805,6 +809,9 @@ if [ -n "$FLEET_PID" ]; then
     # No Ran line, or "Ran 0 tests", means the runner never reached the tests: a refusal, not a pass.
     fleet_ran_count="$(echo "$fleet_ran_line" | grep -oE '^Ran [0-9]+' | grep -oE '[0-9]+')"
     [ "${fleet_ran_count:-0}" -eq 0 ] && FLEET_TESTS_EXIT=1
+elif [ -n "${FLEET_WORKSPACE_EXPLICIT:-}" ]; then
+    FLEET_TESTS_EXIT=1
+    FLEET_TESTS_DESC="REFUSED: FLEET_WORKSPACE is set but $FLEET_RUNNER does not exist"
 fi
 
 RAN_LINE="$(grep -E '^Ran [0-9]+ tests? in' "$LOG" | tail -1)"
