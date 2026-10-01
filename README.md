@@ -407,6 +407,7 @@ aimail budget autopilot       # cron: checkpoint, then park, then ramp
 aimail budget checkpoint [--now]       aimail budget park [reason] | ramp
 aimail budget unpark <seat>            aimail budget night | day
 aimail budget account         # which account is active and its cap
+aimail budget report [--date YYYY-MM-DD] [--mail]   # the day's cost per task
 ```
 
 The idea it is built around: the five-hour block **boundary** is measurable
@@ -441,6 +442,21 @@ itself at the ramp, so a parked poller costs nothing and recovers on its own. A
 disarmed poller also costs nothing and never wakes: only a human can restart it.
 Never tell a seat to disarm. `budget unpark <seat>` exempts one seat from the
 current park only and vouches for nothing about its usage.
+
+**The daily cost-per-task report.** `aimail budget report` prints, for one local date (default today),
+the spend across every configured account, the number of asks closed that day, the cost per closed ask,
+and the review rounds per approved branch (see [Review](#review-an-approval-is-a-recorded-fact-about-one-commit)).
+Spend comes from `ccusage daily --json` run once with every account's config directory joined by commas in
+`CLAUDE_CONFIG_DIR`; `AIMAIL_CCUSAGE_BIN` replaces the command (tests point it at a fixture). A closed ask is
+a ledger row in state `done` whose closing time falls in the date; withdrawn rows are listed and not counted.
+A figure that was not measured prints `n/a`: no asks closed gives `n/a`, never a zero and never a division,
+and a ccusage that does not answer gives `UNMEASURABLE` (exit 4). `--mail` sends the same text, with
+`--no-wake`, to the seat named by `AIMAIL_SUPERVISOR` (refused when it is unset or not a registered seat).
+For the operator to install, once a day at 23:55 local time:
+
+```cron
+55 23 * * * aimail budget report --mail >> report.log 2>&1
+```
 
 Per-account caps:
 

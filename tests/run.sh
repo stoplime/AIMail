@@ -4641,6 +4641,19 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/no_wake.sh produced no summary line (rc=$NW_RC)")
 fi
 
+section "daily cost-per-task report — tests/daily_report.sh (standalone script, folded in)"
+DR_OUT="$(bash "$REPO/tests/daily_report.sh" 2>&1)"; DR_RC=$?
+printf '%s\n' "$DR_OUT" | sed 's/^/  /'
+_dr_nums="$(printf '%s\n' "$DR_OUT" | grep -oE 'daily_report: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+DR_PASS="$(sed -n '1p' <<<"$_dr_nums")"
+DR_FAIL="$(sed -n '2p' <<<"$_dr_nums")"
+if [[ -n "$DR_PASS" && -n "$DR_FAIL" ]]; then
+  PASS=$((PASS+DR_PASS)); FAIL=$((FAIL+DR_FAIL))
+  (( DR_FAIL == 0 && DR_RC == 0 )) || FAILURES+=("tests/daily_report.sh reported $DR_FAIL failure(s), rc=$DR_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/daily_report.sh produced no summary line (rc=$DR_RC)")
+fi
+
 section "doctor"
 # doctor checks the real tree's git hooks, which the throwaway copy $AIMAIL points at does not have
 AIMAIL="$REPO/bin/aimail" accepts "doctor runs"  -- doctor

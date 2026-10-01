@@ -277,6 +277,12 @@ BUDGET — keyed on the block BOUNDARY, which is measurable
                                              recommend -- read-only, no marker, no mail
                                              (docs/load_balancer_design_2026-09-21.md §5:
                                              a full weekly cycle of readings comes first)
+  aimail budget report [--date YYYY-MM-DD] [--mail]
+                                             the day's cost per task: spend across the configured
+                                             accounts (ccusage daily), asks closed that day, cost per
+                                             closed ask (n/a when none closed), review rounds per
+                                             approved branch. --mail sends it, no-wake, to the
+                                             supervisor seat. Cron: 55 23 * * * (see README)
   aimail budget seats-tick | balance-tick   the two steps the autopilot tick runs
 
 ⛔ PARK IS NOT DISARM. Pollers sleep on the throttle flag and wake themselves at
@@ -545,9 +551,10 @@ case "$cmd" in
       act)        source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; source "$_SELF/../lib/placement.sh"; source "$_SELF/../lib/act.sh"; budget_act "$@" ;;
       seats-tick) source "$_SELF/../lib/balance.sh"; ensure_dirs; seat_usage_tick "${1:-}" ;;
       balance)    supervisor_scan_touch; source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; budget_balance "$@" ;;
+      report)     source "$_SELF/../lib/ask.sh"; source "$_SELF/../lib/report.sh"; budget_report "$@" ;;
       balance-tick) source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/balance.sh"; ensure_dirs; balance_evaluate ;;
       *) refused "unknown 'budget' subcommand: '${sub}'" \
-           "Try: status | pool | pick | recommend-migration <seat> | callout <pct> | probe | history [--all] | seat-check <seat> | block | checkpoint | park | ramp | unpark | autopilot | watch | night | day | account" ;;
+           "Try: status | pool | report | pick | recommend-migration <seat> | callout <pct> | probe | history [--all] | seat-check <seat> | block | checkpoint | park | ramp | unpark | autopilot | watch | night | day | account" ;;
     esac ;;
 
   status)  source "$_SELF/../lib/status.sh"; status_report "${1:-}" ;;
