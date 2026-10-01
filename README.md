@@ -12,6 +12,7 @@ Contents: [Install](#install) · [Quick start](#quick-start) ·
 [Seats and mail](#seats-and-mail) · [Output states](#the-four-output-states) ·
 [Fleet dashboard](#the-fleet-dashboard) · [Asks and prompts](#asks-prompts-and-the-drop-prevention-guards) ·
 [Claims](#claims) · [Landing and git guards](#landing-and-git-guards) ·
+[Review](#review-an-approval-is-a-recorded-fact-about-one-commit) ·
 [Budget](#budget-checkpoints-and-unattended-running) · [Hooks](#hooks-and-kill-switches) ·
 [Configuration](#configuration) · [Tests](#tests) · [Known limits](#known-limits)
 
@@ -308,6 +309,7 @@ Installable git hooks, each verified by an `aimail` check command:
 | `hooks/sterility_guard.sh` | `pre-commit` | Refuses a commit whose staged diff adds a term from `AIMAIL_STERILITY_TERMS`. | `aimail doctor` |
 | `hooks/sterility_commit_msg_guard.sh` | `commit-msg` | The same, for the commit message. | `aimail commit-msg-guard` |
 | `hooks/sterility_push_guard.sh` | `pre-push` | Refuses any push from a non-human seat, and any outgoing commit carrying a sterility term. | `aimail push-guard` |
+| `hooks/review_prepush_guard.sh` | `pre-push` | Refuses a push of a branch that is not approved for its exact tip (see [Review](#review-an-approval-is-a-recorded-fact-about-one-commit)). | `aimail review status` |
 
 Each check takes `--selftest`. A dangling symlink or a `core.hooksPath` into a
 vanished directory makes git run no hooks, silently, which is why the checks
@@ -325,6 +327,63 @@ never values).
 from a clean checkout of an exact sha, one at a time, and
 `bin/battery_queue.sh` queues them. `bin/check_battery_summary.sh` accepts a
 battery summary only when its tree matches the sha being landed.
+
+---
+
+## Review: an approval is a recorded fact about one commit
+
+A mail saying "reviewed, looks good" is text; nobody can ask it which commit it meant. `aimail review`
+turns approval into a row that names the exact commit, the reviewer, the version of the checker and the
+time. Asking for the status of a branch always answers for the branch's **current** tip, so a new commit
+makes an older approval stale without anyone having to say so. Nothing here reads message text.
+
+```
+aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]...
+aimail review check <sha>                       # runs the configured checker, prints pass or fail
+aimail review approve <sha> --by <seat>
+aimail review reject  <sha> --by <seat> --reason "..."
+aimail review status <repo> <branch> | --sha <full-sha> [--quiet]   # approved | stale | in review | rejected | none
+aimail review list                              # every open review with its age
+aimail review handoff <repo> <branch>           # the only way to hand over a branch for pushing
+```
+
+- **`start`** opens a review of the branch's current commit and refuses a seat that wrote any of it. Authors
+  are the commit authors between the base and the tip, any `--author` given here, and `Seat: <name>`
+  trailers in the commit messages. It writes a record skeleton, from the checker, to the records folder.
+- **`check`** runs the checker on the filled-in record and the diff. It stores the checker file's hash **at
+  that moment**, so editing the checker later cannot change what an approval vouched for.
+- **`approve`** needs a passing check on a record that has not changed since, and must come from the
+  record's reviewer. **`reject`** records a reason.
+- **`--by` is tied to the session.** `start` refuses a session registered to a different seat, and `approve`
+  and `reject` also refuse a session that is not registered to any seat (`status` and `list` work anywhere).
+  Without this tie an author could simply type someone else's name.
+- **`handoff`** refuses unless the branch's current commit is approved (a stale or unreviewed branch both
+  refuse, naming the status). On success it prints the push command and the path of the pull-request
+  description named by the record's `pr-description:` line, and appends the commit, branch, reviewer, user
+  and time to `state/review_handoffs.log`. A refused handoff logs nothing. Anyone giving a person a push
+  command or calling a branch ready goes through this command, not through a mail.
+- **The push gate.** `hooks/review_prepush_guard.sh` is a `pre-push` hook that asks the same question at
+  push time. A push of a branch that is not approved for its exact tip is refused; branches matching the
+  repo's exempt pattern (merge targets) are not asked about. `PR_READY_OVERRIDE="<reason>"` gets past it and
+  is logged to `state/review_overrides.log`.
+
+Repos are declared in `etc/aimail.conf`, so the library itself names no project. `AIMAIL_REVIEW_REPOS` lists
+the repo names; for each name `<repo>` (hyphens become underscores in variable names) set:
+
+| Variable | Meaning |
+|---|---|
+| `AIMAIL_REVIEW_PATH_<repo>` | where the repo is checked out |
+| `AIMAIL_REVIEW_RECORDS_<repo>` | where the `<full-sha>.md` records live |
+| `AIMAIL_REVIEW_CHECK_<repo>` | the checker command, called as `<cmd> <sha> --repo <path> --records <dir> --base <ref>`; it exits 0 when the record and diff pass. With `--template` instead of `--records` it prints a record skeleton |
+| `AIMAIL_REVIEW_BASE_<repo>` | the default base (`--base` overrides) |
+| `AIMAIL_REVIEW_CHECKER_FILE_<repo>` | the checker file to hash at check time (optional) |
+| `AIMAIL_REVIEW_URL_<repo>` | a regex for the remote URLs the push gate applies to |
+| `AIMAIL_REVIEW_PUSH_EXEMPT_<repo>` | a regex for branches the push gate does not ask about (optional) |
+| `AIMAIL_REVIEW_REMOTE_<repo>` | the remote `handoff` prints in the push command (default `origin`) |
+
+What it cannot know is who wrote a commit when seats commit under one shared git identity. That is why
+`start --author` exists: the person who knows fills the gap, and the record's own `author:` line is a second
+witness. `tests/review.sh` (part of `tests/run.sh`) exercises every refusal beside an acceptance arm.
 
 ---
 
