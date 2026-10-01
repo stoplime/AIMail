@@ -78,10 +78,11 @@ violated.
   incident). It replaces walking five separate checks by hand and remembering
   that a second, easy-to-forget registration exists at all.
 - **A poller is a standalone background task, never chained.** Run
-  `aimail poll <seat>` as its own call with `run_in_background=true` and
-  nothing else in the command — no `&`, no `;`, no piping into `tail`. Chaining
-  it after another command (`ack ... && poll ... &`) orphans it: the harness
-  loses track of the process and it becomes unreachable.
+  `aimail poll-persistent <seat>` as a Monitor task (30-minute cap; re-arm at
+  each expiry, one poller at a time) with nothing else in the command — no `&`,
+  no `;`, no piping into `tail`. Chaining it after another command orphans it:
+  the harness loses track of the process and it becomes unreachable. The
+  one-shot `aimail poll <seat>` is deprecated.
 - **A poller EXIT is a mail delivery, not a failure.** When it exits, the mail
   body printed once, into the task's own output file. Read that file — do not
   re-derive the message from a one-line summary on a later poll.
