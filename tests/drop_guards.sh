@@ -118,12 +118,12 @@ rc="$(_run prompt triage p0001 --no-ask "answered in-turn, no work" )"
 section "guard 1 — a prompt that is an ask: ask add --prompt creates the row and triages in one step"
 _hook capture '{"session_id":"s1","prompt":"build the report and mail it"}' >/dev/null
 [[ "$(_hook gate '{"session_id":"s1"}')" == 2 ]]; check $? "the new prompt blocks the stop again (a fresh stop attempt)"
-rc="$(_run ask add --owner alpha --quote "build the report and mail it" --next "alpha builds" --check false --prompt p0003)"
+rc="$(_run ask add --owner alpha --quote "build the report and mail it" --next "alpha builds" --check false --until +30d --prompt p0003)"
 [[ "$rc" == 0 ]]; check $? "ask add --prompt <id> succeeds"
 KID="$(tail -1 "$T/c.out")"
 "$AIMAIL" prompt list 2>/dev/null | _has "^p0003 *ask *$KID"; check $? "the prompt is triaged to the new ask ($KID)"
 [[ "$(_hook gate '{"session_id":"s1"}')" == 0 ]]; check $? "gate passes after the one-step add"
-rc="$(_run ask add --owner alpha --quote "x" --next "y" --check false --prompt p7777)"
+rc="$(_run ask add --owner alpha --quote "x" --next "y" --check false --until +30d --prompt p7777)"
 [[ "$rc" == 3 ]] && _has "no such captured prompt" < "$T/c.err"; check $? "ask add --prompt with an unknown prompt id is refused"
 rc="$(_run ask show "$KID")"; _has "^prompt_id: *p0003" < "$T/c.out"; check $? "the ask row records which prompt it came from"
 
@@ -169,6 +169,32 @@ grep -rlq "STALE ask $PID" "$AIMAIL_ROOT/mail/" 2>/dev/null; check $? "…and th
 LID="$("$AIMAIL" ask add --owner beta --quote "legacy parked thing" --next "n" --check "test -f $T/never2" 2>/dev/null | tail -1)"
 _setcol "$LID" 18 "someone"
 "$AIMAIL" ask digest 2>/dev/null | _has "$LID .*no date or trigger (legacy park)"; check $? "a legacy park with no end is still listed, flagged as having none"
+
+section "guard 2b — a check that can never pass needs an end (--until or --trigger)"
+rc="$(_run ask add --owner alpha --quote "owner decides X" --next "wait" --check false)"
+[[ "$rc" == 3 ]] && _has "needs --until <date> or --trigger" < "$T/c.err"; check $? "REFUSE: --check false with no date and no trigger"
+rc="$(_run ask add --owner alpha --quote "owner decides X" --next "wait" --check /bin/false)"
+[[ "$rc" == 3 ]]; check $? "REFUSE: /bin/false is the same check, not a way around the rule"
+rc="$(_run ask add --owner alpha --quote "owner decides X" --next "wait" --check false --until 2001-01-01)"
+[[ "$rc" == 3 ]]; check $? "REFUSE: a date in the past is no end"
+rc="$(_run ask add --owner alpha --quote "owner decides X" --next "wait" --check false --until +2d)"
+[[ "$rc" == 0 ]]; check $? "ACCEPT: --check false --until +2d"
+FD="$(tail -1 "$T/c.out")"
+rc="$(_run ask add --owner alpha --quote "owner decides Y" --next "wait" --check false --trigger "owner picks A or B")"
+[[ "$rc" == 0 ]]; check $? "ACCEPT: --check false --trigger \"…\""
+FT="$(tail -1 "$T/c.out")"
+rc="$(_run ask add --owner alpha --quote "real" --next "n" --check true --until +2d)"
+[[ "$rc" == 3 ]]; check $? "REFUSE: --until on a real check (it closes itself)"
+_run ask sweep >/dev/null
+rc="$(_run ask list)"; _has "$FD .*WAITING-ON-OWNER" < "$T/c.out"; check $? "a dated false row waits quietly before its date"
+_backdate_until() { awk -F'\t' -v OFS='\t' -v id="$1" '$1==id {$19=1} {print}' "$AIMAIL_ROOT/state/asks.tsv" > "$T/asks.new" && mv "$T/asks.new" "$AIMAIL_ROOT/state/asks.tsv"; }
+_backdate_until "$FD"
+_run ask sweep >/dev/null
+rc="$(_run ask list)"; _has "$FD .*OWNER-OVERDUE" < "$T/c.out"; check $? "past its date the row reads OWNER-OVERDUE"
+rc="$(_run ask touch "$FD" --by alpha --state "renewed" --until +5d)"
+[[ "$rc" == 0 ]]; check $? "ask touch --until renews a never-passing row"
+_run ask sweep >/dev/null
+rc="$(_run ask list)"; _has "$FD .*WAITING-ON-OWNER" < "$T/c.out"; check $? "…and it waits again"
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
 section "guard 3 — a work mail must cite an open ask id"

@@ -151,6 +151,8 @@ acceptance arm for every guard).
    its seat, age, state, park date or trigger and next step, plus the number of owner prompts never
    triaged.
 
+**An owner-verdict ask needs an end.** `ask add --check false` (a row only a person can close) is refused without `--until <date>` or `--trigger "<event>"`, the same rule as a park. A row past its `--until` reads `OWNER-OVERDUE` in `ask list` and is mailed as stale by the sweep; `ask touch <id> --until <date>` renews it. A trigger-only row keeps waiting until it is closed or touched.
+
 ## Migrating an existing mailbox
 
 ```bash

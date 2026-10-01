@@ -67,6 +67,18 @@ ASK_STATES="open waiting_owner done withdrawn"
 
 _ask_clean() { printf '%s' "$1" | tr '\t\n\r' '   '; }
 
+# A check that can never pass by itself: nothing will ever close the row except a person, so it
+# needs an end (a date or a named trigger) exactly like a park does. The literal `false` is the
+# documented case (the owner's verdict closes it). Any other always-failing check is not parked
+# by the sweep -- it runs, fails and goes stale like any open row, so it is surfaced, not dropped.
+_ask_check_never_passes() {  # <check> -> rc 0 when it can never pass
+  local c; c="$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  case "$c" in
+    false|/bin/false|/usr/bin/false|"! true") return 0 ;;
+  esac
+  return 1
+}
+
 _ask_locked() {  # _ask_locked <fn> [args…]  -- run fn under the ledger lock
   ensure_dirs
   local lockf; lockf="$(ASK_LOCK)"
@@ -131,6 +143,11 @@ _ask_parked() {  # <row> -> rc 0 when currently parked
   return 0
 }
 
+_ask_owner_overdue() {  # <row> -> rc 0 when a never-passing row's own --until has passed
+  local u; u="$(_ask_field "$1" 19)"
+  [[ "$u" =~ ^[0-9]+$ ]] && (( u > 0 )) && (( u <= $(now_epoch) ))
+}
+
 _ask_is_stale() {  # open row, untouched past the stale window, and not currently parked
   local row="$1" st; st="$(_ask_field "$row" 8)"
   [[ "$st" == "open" ]] || return 1
@@ -140,19 +157,21 @@ _ask_is_stale() {  # open row, untouched past the stale window, and not currentl
 
 # ─── add ─────────────────────────────────────────────────────────────────────────────────
 _ask_add_locked() {
-  local owner="$1" quote="$2" next="$3" check="$4" rank="$5" prompt_id="${6:-}" id
+  local owner="$1" quote="$2" next="$3" check="$4" rank="$5" prompt_id="${6:-}" until_at="${7:-0}" trigger="${8:-}" id
   _ask_ensure_file
   id="$(_ask_next_id)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$id" "$(now_epoch)" "$owner" "$(_ask_clean "$quote")" "$(_ask_clean "$next")" \
-    "$(_ask_clean "$check")" "$rank" "open" 0 "" "" "" 0 "" 0 0 "" "" 0 "" "$prompt_id" >> "$(ASK_FILE)"
+    "$(_ask_clean "$check")" "$rank" "open" 0 "" "" "" 0 "" 0 0 "" "" "${until_at:-0}" "$(_ask_clean "$trigger")" "$prompt_id" >> "$(ASK_FILE)"
   printf '%s\n' "$id"
 }
 
 ask_add() {
-  local owner="" quote="" next="" check="" rank=100 prompt_id=""
+  local owner="" quote="" next="" check="" rank=100 prompt_id="" until_text="" trigger=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --until) until_text="${2:-}"; shift 2 ;;
+      --trigger) trigger="${2:-}"; shift 2 ;;
       --owner) owner="${2:-}"; shift 2 ;;
       --quote) quote="${2:-}"; shift 2 ;;
       --next)  next="${2:-}";  shift 2 ;;
@@ -163,9 +182,26 @@ ask_add() {
     esac
   done
   [[ -n "$owner" && -n "$quote" && -n "$next" && -n "$check" ]] || refused \
-    "usage: aimail ask add --owner <seat> --quote \"<owner's words>\" --next \"<step>\" --check '<shell predicate>' [--rank N] [--prompt <p####>]" \
-    "  --check 'false' means: closes only on the owner's verdict (listed as WAITING-ON-OWNER, never stale-escalated)."
+    "usage: aimail ask add --owner <seat> --quote \"<owner's words>\" --next \"<step>\" --check '<shell predicate>' [--rank N] [--prompt <p####>] [--until <date> | --trigger \"<event>\"  (required with --check false)]" \
+    "  --check 'false' means: closes only on the owner's verdict (listed as WAITING-ON-OWNER); it needs --until <date> or --trigger \"<event>\", and once --until passes it reads OWNER-OVERDUE and is mailed as stale. Renew with: ask touch <id> --until <date>."
   owner="$(seat_resolve "$owner")" || exit $?
+  # ⛔ DROP-PREVENTION GUARD 2b: an ask with no machine check that can ever pass (the literal
+  #   `false`: it closes only on the owner's verdict) has nothing that brings it back, so it needs
+  #   an end -- a date (--until) or a named trigger (--trigger) -- the same rule as a park.
+  local until_at=""
+  if _ask_check_never_passes "$check"; then
+    [[ -n "$until_text" || -n "$trigger" ]] || refused \
+      "ask add: a check that can never pass (--check '$check') needs --until <date> or --trigger \"<the named event or decision>\"." \
+      "  A row with no machine check closes only by a person; with no date and no trigger nothing ever brings it back." \
+      "  Examples: --until +3d   --until 2026-10-05   --trigger \"owner picks option A or B\"."
+  elif [[ -n "$until_text" || -n "$trigger" ]]; then
+    refused "ask add: --until/--trigger only go with a check that can never pass (--check false); a real check closes the row itself."
+  fi
+  if [[ -n "$until_text" ]]; then
+    until_at="$(_ask_parse_until "$until_text")" || refused \
+      "ask add: --until '$until_text' is not a future date." "  Use YYYY-MM-DD, 'YYYY-MM-DD HH:MM', +Nd or +Nh, in the future."
+  fi
+  trigger="$(_ask_clean "$trigger")"
   [[ "$rank" =~ ^[0-9]+$ ]] || refused "ask add: --rank must be a non-negative integer"
   if [[ -n "$prompt_id" ]]; then
     # --prompt <p####> links this ask to the owner prompt it came from AND triages that prompt
@@ -173,7 +209,7 @@ ask_add() {
     source "$(dirname "${BASH_SOURCE[0]}")/prompts.sh"
     prompt_exists "$prompt_id" || refused "ask add: no such captured prompt '$prompt_id' (aimail prompt list)"
   fi
-  local id; id="$(_ask_locked _ask_add_locked "$owner" "$quote" "$next" "$check" "$rank" "$prompt_id")"
+  local id; id="$(_ask_locked _ask_add_locked "$owner" "$quote" "$next" "$check" "$rank" "$prompt_id" "$until_at" "$trigger")"
   [[ -n "$prompt_id" ]] && prompt_triage "$prompt_id" --ask "$id" --by "$owner" >/dev/null
   ok "ask $id added — owner $owner, rank $rank: $(_ask_clean "$quote")"
   printf '%s\n' "$id"
@@ -192,7 +228,7 @@ ask_add() {
 _ASK_WAITING_ON_UNSET='__ask_waiting_on_not_given__'
 
 _ask_touch_locked() {
-  local id="$1" by="$2" state="$3" evidence="$4" next="$5" waiting_on="$6" until_at="$7" trigger="$8" row st
+  local id="$1" by="$2" state="$3" evidence="$4" next="$5" waiting_on="$6" until_at="$7" trigger="$8" renew="${9:-0}" row st
   row="$(_ask_row "$id")"; [[ -n "$row" ]] || refused "ask touch: no such ask '$id'"
   st="$(_ask_field "$row" 8)"
   [[ "$st" == "open" || "$st" == "waiting_owner" ]] || refused "ask touch: '$id' is $st, not open"
@@ -202,6 +238,9 @@ _ask_touch_locked() {
   if [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]]; then
     # a park (non-empty waiting_on) carries its date and/or trigger; clearing it clears both
     prog="$prog"'; $18="'"$(_ask_clean "$waiting_on")"'"; $19='"${until_at:-0}"'; $20="'"$(_ask_clean "$trigger")"'"'
+  fi
+  if [[ "$renew" == 1 ]]; then
+    prog="$prog"'; $19='"${until_at:-0}"'; $20="'"$(_ask_clean "$trigger")"'"'
   fi
   # a touch ends the stale episode: the next stale mail / escalation is allowed again
   prog="$prog"'; $15=0; $16=0'
@@ -246,8 +285,18 @@ ask_touch() {
   #   field (deliberately generic here: no operator/company/project name belongs in this
   #   shared source -- see lib/sterility.sh's own header).
   [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && waiting_on="$(_ask_clean "$waiting_on")"
-  local until_at=""
-  if [[ "$waiting_on" == "$_ASK_WAITING_ON_UNSET" || -z "$waiting_on" ]]; then
+  local until_at="" _row _renew=0
+  _row="$(_ask_row "$id")"
+  # a row whose check can never pass carries its own end (--until/--trigger on add); a touch may renew it
+  if [[ -n "$_row" ]] && _ask_check_never_passes "$(_ask_field "$_row" 6)" \
+     && { [[ -n "$until_text" ]] || [[ -n "$trigger" ]]; } \
+     && [[ "$waiting_on" == "$_ASK_WAITING_ON_UNSET" || -z "$waiting_on" ]]; then
+    _renew=1
+    if [[ -n "$until_text" ]]; then
+      until_at="$(_ask_parse_until "$until_text")" || refused "ask touch: --until '$until_text' is not a future date."
+    fi
+    trigger="$(_ask_clean "$trigger")"
+  elif [[ "$waiting_on" == "$_ASK_WAITING_ON_UNSET" || -z "$waiting_on" ]]; then
     # no park is being set (nothing given, or an explicit clear): a date/trigger would be orphaned
     [[ -z "$until_text" && -z "$trigger" ]] || refused "ask touch: --until/--trigger only go with --waiting-on <who>." \
       "  They say when and why a PARK ends; without --waiting-on there is no park to attach them to."
@@ -265,7 +314,7 @@ ask_touch() {
     fi
     trigger="$(_ask_clean "$trigger")"
   fi
-  _ask_locked _ask_touch_locked "$id" "$by" "$state" "$evidence" "$next" "$waiting_on" "$until_at" "$trigger"
+  _ask_locked _ask_touch_locked "$id" "$by" "$state" "$evidence" "$next" "$waiting_on" "$until_at" "$trigger" "$_renew"
   ok "ask $id touched by $by: $(_ask_clean "$state")$( [[ "$waiting_on" != "$_ASK_WAITING_ON_UNSET" ]] && printf ' (waiting_on=%s%s%s)' "${waiting_on:-<cleared>}" "${until_at:+, until $(date -d @"$until_at" '+%F %H:%M')}" "${trigger:+, trigger: $trigger}" )"
 }
 
@@ -312,7 +361,7 @@ _ask_state_label() {  # <row> -> OPEN | STALE | WAITING-ON-<seat> | WAITING-ON-O
     open) if _ask_parked "$row"; then echo "WAITING-ON-${wo^^}"
           elif _ask_is_stale "$row"; then echo "STALE"
           else echo "OPEN"; fi ;;
-    waiting_owner) echo "WAITING-ON-OWNER" ;;
+    waiting_owner) if _ask_owner_overdue "$row"; then echo "OWNER-OVERDUE"; else echo "WAITING-ON-OWNER"; fi ;;
     done) echo "DONE" ;;
     withdrawn) echo "WITHDRAWN" ;;
     *) echo "$st" ;;
@@ -496,9 +545,15 @@ _ask_sweep_locked() {
     [[ "$st" == "open" || "$st" == "waiting_owner" ]] || continue
     id="$(_ask_field "$row" 1)"; owner="$(_ask_field "$row" 3)"; check="$(_ask_field "$row" 6)"
     # literal `false` = the owner's verdict closes it; never run, never stale-escalated
-    if [[ "$(printf '%s' "$check" | sed 's/[[:space:]]//g')" == "false" ]]; then
+    if _ask_check_never_passes "$check"; then
       [[ "$st" == "waiting_owner" ]] || _ask_rewrite "$id" '$8="waiting_owner"'
-      waiting_n=$((waiting_n+1)); continue
+      # its own --until has passed: surface it like a stale row (once per episode); a row with
+      # only a trigger, or whose date is still ahead, keeps waiting quietly
+      if _ask_owner_overdue "$row"; then
+        :   # fall through to the stale mail below
+      else
+        waiting_n=$((waiting_n+1)); continue
+      fi
     fi
     out="$(_ask_run_check "$id" "$check")"; rc=$?
     if [[ "$rc" == 0 ]]; then

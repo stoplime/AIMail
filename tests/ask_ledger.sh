@@ -57,7 +57,7 @@ _backdate() {
 section "ask ledger — add / touch / list / show"
 ID1="$("$AIMAIL" ask add --owner alpha --quote "ship the widget" --next "alpha builds" --check "test -f $T/widget.done" --rank 5 2>/dev/null | tail -1)"
 [[ "$ID1" =~ ^k[0-9]{4}$ ]]; check $? "ask add prints an id (got '$ID1')"
-ID2="$("$AIMAIL" ask add --owner beta --quote "owner verdict needed on X" --next "wait" --check "false" 2>/dev/null | tail -1)"
+ID2="$("$AIMAIL" ask add --owner beta --quote "owner verdict needed on X" --next "wait" --check "false" --trigger "owner verdict" 2>/dev/null | tail -1)"
 "$AIMAIL" ask list --owner alpha 2>/dev/null | _has "^$ID1 *OPEN *alpha"; check $? "ask list shows the open row with its owner"
 "$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state: *open"; check $? "ask show reads the row's state"
 "$AIMAIL" ask touch "$ID1" --by alpha --state "half built" --evidence "sha0001" --next "tests" >/dev/null 2>&1
@@ -99,7 +99,7 @@ touch "$T/widget.done"
 "$AIMAIL" ask show "$ID1" 2>/dev/null | _has "^state: *done"; check $? "a passing check CLOSES the row"
 "$AIMAIL" ask list 2>/dev/null | _has "^$ID1"; rc=$?; [[ $rc != 0 ]]; check $? "a done row leaves the default list (--all shows it)"
 "$AIMAIL" ask list --all 2>/dev/null | _has "^$ID1 *DONE"; check $? "ask list --all shows DONE"
-ID3="$("$AIMAIL" ask add --owner alpha --quote "withdraw me" --next "n" --check "false" 2>/dev/null | tail -1)"
+ID3="$("$AIMAIL" ask add --owner alpha --quote "withdraw me" --next "n" --check "false" --trigger "owner verdict" 2>/dev/null | tail -1)"
 "$AIMAIL" ask withdraw "$ID3" >/dev/null 2>&1; rc=$?; [[ $rc != 0 ]]; check $? "withdraw without --owner-approved is refused"
 "$AIMAIL" ask withdraw "$ID3" --owner-approved "drop it, said the owner" >/dev/null 2>&1
 "$AIMAIL" ask show "$ID3" 2>/dev/null | _has "^state: *withdrawn"; check $? "withdraw with the owner's quote closes the row"
