@@ -4573,6 +4573,20 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/push_guard.sh produced no summary line (rc=$PG_RC)")
 fi
 
+section "branch review — tests/review.sh (standalone script, folded in)"
+# Drives the real bin/aimail review commands and the two enforcement scripts on a synthetic repo.
+RV_OUT="$(bash "$REPO/tests/review.sh" 2>&1)"; RV_RC=$?
+printf '%s\n' "$RV_OUT" | sed 's/^/  /'
+_rv_nums="$(printf '%s\n' "$RV_OUT" | grep -oE 'review: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+RV_PASS="$(sed -n '1p' <<<"$_rv_nums")"
+RV_FAIL="$(sed -n '2p' <<<"$_rv_nums")"
+if [[ -n "$RV_PASS" && -n "$RV_FAIL" ]]; then
+  PASS=$((PASS+RV_PASS)); FAIL=$((FAIL+RV_FAIL))
+  (( RV_FAIL == 0 && RV_RC == 0 )) || FAILURES+=("tests/review.sh reported $RV_FAIL failure(s), rc=$RV_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/review.sh produced no summary line (rc=$RV_RC)")
+fi
+
 section "doctor"
 # doctor checks the real tree's git hooks, which the throwaway copy $AIMAIL points at does not have
 AIMAIL="$REPO/bin/aimail" accepts "doctor runs"  -- doctor

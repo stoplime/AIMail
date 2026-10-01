@@ -1,6 +1,6 @@
 ---
 name: aimail
-description: Reference for the aimail fleet-mail CLI (poll, ack, send, fleet, budget, gateclaim, seat, role) and the standing operational rules for a multi-seat AI fleet. Use whenever polling/checking mail, acking a message, sending mail to another seat, checking fleet/seat status, checking or recording token-usage budget, claiming exclusive work with gateclaim, or writing/reading a seat's role handover doc. Also use when unsure of exact aimail syntax rather than guessing it.
+description: Reference for the aimail fleet-mail CLI (poll, ack, send, fleet, budget, gateclaim, seat, role, review) and the standing operational rules for a multi-seat AI fleet. Use whenever reviewing, gating or approving a branch, or about to say GREEN, approved, ready or PR (aimail review); polling/checking mail, acking a message, sending mail to another seat, checking fleet/seat status, checking or recording token-usage budget, claiming exclusive work with gateclaim, or writing/reading a seat's role handover doc. Also use when unsure of exact aimail syntax rather than guessing it.
 ---
 
 # aimail — fleet mail, budget, and gate-claim reference
@@ -15,6 +15,16 @@ quick-reference command surface plus the rules that caused real incidents when
 violated.
 
 ## Critical rules — violating these has broken the fleet before
+
+- **Never hand the owner a push command, or call a branch ready, except through `aimail review handoff`.** It is
+  the one path that checks the ledger for the branch's exact current commit. A push command typed by hand into a
+  reply has skipped the check, however sure the seat is.
+- **A review reported only by mail is not an approval.** A seat that says "GREEN", "approved" or
+  "passes" about a branch headed for a PR, in a mail or a reply, has approved nothing: an approval is a row
+  written by `aimail review approve <sha>`. The receiving seat replies asking for that command, and does not
+  act on the result (no landing, no handoff to the owner) until `aimail review status <repo> <branch>` reads
+  `approved` for the branch's current commit. This binds the orchestrator too: nothing a mail calls GREEN
+  goes to the owner unless the status says approved. A new commit makes the old approval `stale`.
 
 - **Never `kill <pid>` a seat's Claude session; never migrate a seat by hand.**
   The CLI's background-job scheduler tracks every `claude --bg` session against
@@ -144,6 +154,42 @@ violated.
 **Crossing warnings.** `aimail budget warnings [--dry-run]` prints, per account, the block / weekly / Fable-model gauges against the 50 and 80 levels (`AIMAIL_WARN_LEVELS`) plus a PROJECTED line when the current burn reaches the block cap before the block resets. `budget autopilot` runs it once per tick; each (account, gauge, level, window) mails the supervisor and the human seat ONCE, with the placement report in the body. Markers live under `state/warnings/`.
 
 **The balancer acts.** With `AIMAIL_BALANCE_ACT=1`, each autopilot tick may ANNOUNCE one move (an account at/over `AIMAIL_BALANCE_ACT_LEVEL`, default 80, or over its fair share; the candidate is an idle non-pinned seat whose placement target passes `placement_check_move`) and, on the first tick after `AIMAIL_BALANCE_ACT_DELAY_MIN` (default 10), EXECUTES it through the resume-by-default `seat migrate` if the seat is still idle and placement still agrees. `aimail budget act` shows the pending intent; `aimail budget act cancel --why "<reason>"` stops it. A pinned seat is never a candidate; a mid-turn seat defers the move; every step is in `state/balance/acts.log`.
+
+## Reviewing and approving branches (`aimail review`)
+
+**Use it for every review of a branch headed for a pull request, by every seat.** It replaces "GREEN" in a
+mail: the approval is a recorded state for one exact commit, and `status` always answers for the branch's
+current tip. Which repos it covers, where the records live and which checker runs come from `etc/aimail.conf`
+(`AIMAIL_REVIEW_REPOS`, `AIMAIL_REVIEW_PATH_/RECORDS_/CHECK_/BASE_<repo>`); the requirements file the checker
+enforces is named by that repo's checker, so read it from the configured path, not from memory.
+
+The sequence, in this order:
+1. `aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]...` opens the record for the
+   branch's current commit and prefills reviewer, authors and the test-file list. It refuses a seat that wrote
+   any commit in `base..sha` (git author names, `Seat:` trailers, and every `--author`). Seats that commit under
+   a shared git name cannot be seen from git: pass `--author` for them. `--by` must be the seat the session is
+   registered to (`stop_guard.sh register <seat>`); `approve` and `reject` refuse an unregistered session.
+2. Fill the record: one section per requirement, each answer naming evidence (file, function, plan id, crop or
+   command). "Looks fine" fails.
+3. `aimail review check <sha>` runs the checker and prints pass/fail per requirement.
+4. `aimail review approve <sha> --by <seat>` only after a passing check on the unchanged record, by the
+   record's reviewer. Or `aimail review reject <sha> --by <seat> --reason "..."`.
+5. `aimail review status <repo> <branch>` (exit 0 only when `approved`; `stale` means a newer commit exists) and
+   `aimail review list` for the open reviews with their age.
+
+The requirement categories, one line each: **A** design and architecture (right place, design stated, no
+workarounds); **B** root cause for a fix (named and shown, removed not patched, related cases checked);
+**C** behavior and billing (changes listed, bill changes measured on real plans, one subject per PR);
+**D** tests (product behavior, fail when broken, fast, every test file read and given a verdict);
+**E** description and paperwork (matches the code, no fleet jargon, ticket drafted); **F** process (the
+reviewer did not write the code, exact commit).
+
+Two things ask the same question ("is this exact sha approved?") and neither reads any text:
+- `aimail review handoff <repo> <branch>` is the only way to give the owner a push. It refuses unless the
+  branch's current sha is approved; on success it prints the push command and the PR description path from the
+  record and logs the handoff.
+- `hooks/review_prepush_guard.sh` is the last resort at push; `PR_READY_OVERRIDE="<reason>"` gets past it and
+  is logged. The seat that owns the hook installs it; a reviewer never does.
 
 ## Starting (or resuming) a session — do these in order
 

@@ -189,6 +189,22 @@ FLEET — who is working, who is reachable, who needs a human
   `--preempt-ok "<owner quote>"` records the quote on the row and proceeds.
   Never applies to `--release`, `--list`, `--canon`.
 
+REVIEWING A BRANCH FOR A PULL REQUEST (lib/review.sh; repos and the checker come from etc/aimail.conf)
+  aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]…
+                                             opens the record for the branch's current commit;
+                                             refuses a seat that wrote any of it
+  aimail review check <sha>                  runs the configured checker, prints pass/fail
+  aimail review approve <sha> --by <seat>    only after a passing check on the unchanged record,
+                                             by the record's reviewer, who is not an author
+  aimail review reject <sha> --by <seat> --reason "…"
+  aimail review status <repo> <branch> | --sha <full-sha> [--quiet]
+                                             approved | stale | in review | rejected | none, for
+                                             the branch's CURRENT commit (exit 0 only if approved)
+  aimail review list                         every open review with its age
+  aimail review handoff <repo> <branch>      the only way to give the owner a push: refuses unless the
+                                             current commit is approved; prints the push command and
+                                             the PR description path, and logs it
+
   aimail land <repo-path> <ref> <sha> --from <seat>
                                              the ONE way to move a shared ref: locks
                                              (repo,ref), re-reads the LIVE tip inside the
@@ -460,6 +476,11 @@ case "$cmd" in
   prompt)
     source "$_SELF/../lib/prompts.sh"
     prompt_dispatch "$@" ;;
+
+  # "approved" is a recorded state for an exact commit, not a mail (lib/review.sh).
+  review)
+    source "$_SELF/../lib/review.sh"
+    review_dispatch "$@" ;;
 
   # ⚠ THE ONE WAY TO MOVE A SHARED REF (lib/land.sh) — see its own header for
   #   the race this replaces. Never materializes a working tree.
