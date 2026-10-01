@@ -14,6 +14,9 @@
 #            aimail prompt triage <p####> --no-ask "<reason>"  (an explicit, recorded "no ask")
 #         `aimail ask add … --prompt <p####>` does the add and the triage in one step.
 #
+# Only a REGISTERED SEAT's session is captured or gated (see prompt_session_seat): register the
+# session with `stop_guard.sh register <seat>` first; a human's or an unmapped session is left alone.
+#
 # What is NOT an owner prompt: harness notifications, poller wakes, task events and reminders are
 # machine text that arrives in the same channel. AIMAIL_AUTOMATED_PROMPT_RE (extended regex over the
 # start of the text) names them; those are never recorded. A false negative here only means a
@@ -29,7 +32,17 @@ PROMPT_FILE() { echo "$STATE_DIR/prompts.tsv"; }
 PROMPT_LOCK() { echo "$STATE_DIR/prompts.lock"; }
 PROMPT_SEQ()  { echo "$STATE_DIR/prompts.seq"; }
 
-_PROMPT_DEFAULT_AUTOMATED_RE='^[[:space:]]*(\[SYSTEM NOTIFICATION|<task-notification|<system-reminder|WAKE=|<command-name>|<local-command)'
+_PROMPT_DEFAULT_AUTOMATED_RE='^[[:space:]]*(\[SYSTEM NOTIFICATION|<task-notification|<system-reminder|WAKE=|<command-name>|<local-command|Stop hook (feedback|blocking error)|Background (shell|monitor|task)|Monitor event|\[Request interrupted)'
+
+# A prompt is only owner-addressed work for a REGISTERED SEAT session. A human's own session,
+# a subagent or any unmapped session is never recorded and never gated: the gate could not tell
+# it how to triage, and blocking it at every stop is the trap hooks/stop_guard.sh also refuses
+# to build ("fail open: unmapped session"). The map is the one `stop_guard.sh register <seat>`
+# writes, so one registration serves both guards.
+prompt_session_seat() {  # <session> -> the seat it is registered to, or nothing
+  local f="$STATE_DIR/stopguard/session.${1:-}"
+  [[ -n "${1:-}" && -f "$f" ]] && cat "$f"
+}
 
 _prompt_clean() { printf '%s' "$1" | tr '\t\n\r' '   '; }
 
@@ -105,6 +118,7 @@ sys.stdout.write(sid + "\x1f" + str(txt))
   fi
   [[ -n "$session" ]] || session="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
   prompt_is_automated "$text" && return 0
+  [[ -n "$(prompt_session_seat "$session")" ]] || return 0   # not a registered seat's session
   _prompt_locked _prompt_add_locked "$session" "$text"
 }
 

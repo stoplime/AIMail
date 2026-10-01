@@ -55,6 +55,10 @@ _run() { "$AIMAIL" "$@" >"$T/c.out" 2>"$T/c.err"; echo $?; }
 "$AIMAIL" seat add sup   "supervisor (fixture)" >/dev/null 2>&1
 "$AIMAIL" seat add alpha "worker a (fixture)"   >/dev/null 2>&1
 "$AIMAIL" seat add beta  "worker b (fixture)"   >/dev/null 2>&1
+# Only a REGISTERED SEAT's session is captured or gated: register the fixture sessions the way
+# a real seat does (stop_guard.sh register), one registration serving both guards.
+_reg() { CLAUDE_CODE_SESSION_ID="$1" bash "$REPO/hooks/stop_guard.sh" register "$2" >/dev/null 2>&1; }
+_reg s1 alpha; _reg s2 beta; _reg s9 alpha
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
 section "guard 1 — prompt capture: an owner prompt becomes a row, machine text does not"
@@ -67,8 +71,23 @@ rc="$(_hook capture '{"session_id":"s1","prompt":"[SYSTEM NOTIFICATION - NOT USE
 [[ "$("$AIMAIL" prompt count s1)" == "1" ]]; check $? "still exactly one untriaged prompt after the machine line"
 rc="$(_hook capture 'this is not json')"
 [[ "$rc" == 0 ]]; check $? "capture fails OPEN on garbage input (rc 0, never blocks a prompt)"
+rc="$(_hook capture '{"session_id":"s1","prompt":"Stop hook feedback: ⛔ you have no live poller"}')"
+rc2="$(_hook capture '{"session_id":"s1","prompt":"Background shell bx12 (\"wait\") is still running"}')"
+[[ "$("$AIMAIL" prompt count s1)" == "1" ]]; check $? "the stop-hook feedback and a background-shell notice are not recorded as owner prompts"
 AIMAIL_PROMPT_CAPTURE=0 _hook capture '{"session_id":"s9","prompt":"kill switch case"}' >/dev/null
 [[ "$("$AIMAIL" prompt count s9)" == "0" ]]; check $? "AIMAIL_PROMPT_CAPTURE=0 records nothing"
+
+section "guard 1 — a human's or unregistered session is never recorded and never gated"
+rc="$(_hook capture '{"session_id":"human-sess-1","prompt":"please look at the thing"}')"
+[[ "$rc" == 0 && ! -s "$T/h.out" && "$("$AIMAIL" prompt count human-sess-1)" == "0" ]]; check $? "capture records nothing for an unregistered session"
+rc="$(_hook gate '{"session_id":"human-sess-1"}')"
+[[ "$rc" == 0 ]]; check $? "gate allows an unregistered session"
+# the gate's own guard, independent of capture: a row for a session whose registration is gone
+_reg s7 alpha; _hook capture '{"session_id":"s7","prompt":"row that outlives its registration"}' >/dev/null
+[[ "$(_hook gate '{"session_id":"s7"}')" == 2 ]]; check $? "control: while s7 is registered the same row blocks"
+rm -f "$AIMAIL_ROOT/state/stopguard/session.s7"
+[[ "$(_hook gate '{"session_id":"s7"}')" == 0 ]]; check $? "…and once the session is unregistered the gate lets it stop"
+"$AIMAIL" prompt triage p0002 --no-ask "fixture row, nothing to do" >/dev/null 2>&1
 
 section "guard 1 — the Stop gate: BAD case (untriaged prompt) is blocked, GOOD case (triaged) passes"
 rc="$(_hook gate '{"session_id":"s1"}')"
@@ -99,14 +118,14 @@ rc="$(_run prompt triage p0001 --no-ask "answered in-turn, no work" )"
 section "guard 1 — a prompt that is an ask: ask add --prompt creates the row and triages in one step"
 _hook capture '{"session_id":"s1","prompt":"build the report and mail it"}' >/dev/null
 [[ "$(_hook gate '{"session_id":"s1"}')" == 2 ]]; check $? "the new prompt blocks the stop again (a fresh stop attempt)"
-rc="$(_run ask add --owner alpha --quote "build the report and mail it" --next "alpha builds" --check false --prompt p0002)"
+rc="$(_run ask add --owner alpha --quote "build the report and mail it" --next "alpha builds" --check false --prompt p0003)"
 [[ "$rc" == 0 ]]; check $? "ask add --prompt <id> succeeds"
 KID="$(tail -1 "$T/c.out")"
-"$AIMAIL" prompt list 2>/dev/null | _has "^p0002 *ask *$KID"; check $? "the prompt is triaged to the new ask ($KID)"
+"$AIMAIL" prompt list 2>/dev/null | _has "^p0003 *ask *$KID"; check $? "the prompt is triaged to the new ask ($KID)"
 [[ "$(_hook gate '{"session_id":"s1"}')" == 0 ]]; check $? "gate passes after the one-step add"
 rc="$(_run ask add --owner alpha --quote "x" --next "y" --check false --prompt p7777)"
 [[ "$rc" == 3 ]] && _has "no such captured prompt" < "$T/c.err"; check $? "ask add --prompt with an unknown prompt id is refused"
-rc="$(_run ask show "$KID")"; _has "^prompt_id: *p0002" < "$T/c.out"; check $? "the ask row records which prompt it came from"
+rc="$(_run ask show "$KID")"; _has "^prompt_id: *p0003" < "$T/c.out"; check $? "the ask row records which prompt it came from"
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
 section "guard 2 — parking needs a date or a named trigger"
@@ -196,7 +215,7 @@ _hook capture '{"session_id":"s1","prompt":"one more thing to track"}' >/dev/nul
 rc="$(_run ask owner-digest)"
 _has "UNTRIAGED OWNER PROMPTS: 1" < "$T/c.out"; check $? "the digest counts owner prompts that were never triaged (BAD state is visible)"
 _has "prompt triage <id> --ask" < "$T/c.out"; check $? "…and says how to resolve them"
-"$AIMAIL" prompt triage p0003 --no-ask "informational remark, nothing to do" >/dev/null 2>&1
+"$AIMAIL" prompt triage p0004 --no-ask "informational remark, nothing to do" >/dev/null 2>&1
 rc="$(_run ask owner-digest)"
 _has "UNTRIAGED OWNER PROMPTS: 0" < "$T/c.out"; check $? "…and the count returns to 0 once triaged"
 # empty ledger

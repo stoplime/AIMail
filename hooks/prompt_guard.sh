@@ -63,6 +63,8 @@ case "${1:-}" in
     sid="$(_json_field "$payload" session_id)"
     [[ -n "$sid" ]] || sid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     [[ -n "$sid" ]] || { _glog "-" "allow-no-session"; exit 0; }
+    # an unregistered session (a human's own, a subagent) is never gated: it has no seat to triage as
+    [[ -n "$(prompt_session_seat "$sid")" ]] || { _glog "$sid" "allow-unmapped"; exit 0; }
     ids="$(prompt_untriaged_ids "$sid" 2>/dev/null)"
     if [[ -z "$ids" ]]; then _glog "$sid" "allow-all-triaged"; exit 0; fi
     _glog "$sid" "BLOCK-untriaged:$(printf '%s' "$ids" | tr '\n' ',')"
