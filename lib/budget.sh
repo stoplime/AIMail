@@ -955,6 +955,55 @@ budget_pool() {
   info "response simply had no Fable-scoped entry, which is a real, distinct case from unmeasured."
   info "LEFT is the time left in the account's own 5-hour block (XhYYm) and BLOCK-RESET its local reset"
   info "time (HH:MM); '?' for both means the block is unmeasured or already past (no fresh cached block)."
+  _pool_seat_section "$pool_now" seats_by_acct
+}
+
+# _pool_seat_section <now> <seats-by-account array name> — one row per registered seat, after the account
+# table. Reads the state `aimail seat park` / `seat unpark` write, and the stop hook's log for idle time.
+#   PARKED      yes/no: the seat has an active park (an expired --until is not a park)
+#   PARKED-FOR  time since the park began (XhYYm); '-' when not parked
+#   IDLE        a seat that is NOT parked: time since its last turn ended (XhYYm), the same figure the
+#               cold-seat watchdog uses; '?' when the seat has no stop record. Never 0 for unknown.
+#   GUARD       parked seats: yes when an un-park right now would be refused by the cost guard, no when
+#               the guard has lifted; '-' when not parked
+#   UNTIL/TRIGGER, REASON   the park's own words
+_pool_seat_section() {
+  local now="$1"; local -n _pss_seats="$2"
+  source "${BASH_SOURCE[0]%/*}/park.sh" 2>/dev/null || true
+  command -v seat_park_active >/dev/null 2>&1 || return 0
+  local -A seat_acct=(); local a s
+  for a in "${!_pss_seats[@]}"; do for s in ${_pss_seats[$a]}; do seat_acct["$s"]="$a"; done; done
+  echo
+  info "seats — parking and idle time"
+  printf '%-14s  %-10s  %-6s  %-10s  %-8s  %-5s  %-24s  %s\n' "SEAT" "ACCOUNT" "PARKED" "PARKED-FOR" "IDLE" "GUARD" "UNTIL/TRIGGER" "REASON"
+  local seat parked pfor idle guard what reason pa u tr secs guard_secs
+  guard_secs="$(park_guard_secs)" || return 0
+  while IFS= read -r seat; do
+    [[ -n "$seat" ]] || continue
+    [[ "$(seat_field "$seat" 2)" == "retired" ]] && continue
+    parked="no"; pfor="-"; idle="?"; guard="-"; what="-"; reason="-"
+    if seat_park_active "$seat"; then
+      parked="yes"; idle="-"
+      pa="$(seat_park_read "$seat" parked_at 2>/dev/null || true)"
+      if [[ "$pa" =~ ^[0-9]+$ ]]; then
+        secs=$(( now - pa )); pfor="$(park_fmt_hm "$secs")"
+        if (( secs < guard_secs )); then guard="yes"; else guard="no"; fi
+      else pfor="?"; guard="?"; fi
+      u="$(seat_park_read "$seat" until 2>/dev/null || true)"; tr="$(seat_park_read "$seat" trigger 2>/dev/null || true)"
+      what=""
+      [[ "$u" =~ ^[0-9]+$ ]] && what="until $(date -d "@$u" '+%m-%d %H:%M')"
+      [[ -n "$tr" ]] && what="${what:+$what; }trigger: $tr"
+      [[ -n "$what" ]] || what="-"
+      reason="$(seat_park_read "$seat" reason 2>/dev/null || true)"; [[ -n "$reason" ]] || reason="-"
+    else
+      secs="$(park_idle_secs "$seat" 2>/dev/null || true)"
+      [[ "$secs" =~ ^[0-9]+$ ]] && idle="$(park_fmt_hm "$secs")"
+    fi
+    printf '%-14s  %-10s  %-6s  %-10s  %-8s  %-5s  %-24s  %s\n' "$seat" "${seat_acct[$seat]:-?}" "$parked" "$pfor" "$idle" "$guard" "$what" "$reason"
+  done < <(seat_names)
+  echo
+  info "IDLE: time since the seat's last turn ended; '?' = no stop record (unknown, never read as 0). GUARD yes ="
+  info "an un-park now is refused (park younger than the guard, $(awk -v s="$guard_secs" 'BEGIN{printf "%g", s/3600}')h); a seat idle ~45+ min and not parked is about to go cold."
 }
 
 # ─── Pick — the allocation policy (2026-09-20, item 3) ────────────────────────

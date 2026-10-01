@@ -1,4 +1,7 @@
 # shellcheck shell=bash
+# seat parking state (seat_park_active) decides whether a held mail wakes a seat; definitions only
+# shellcheck source=park.sh
+source "${BASH_SOURCE[0]%/*}/park.sh"
 # mail.sh — compose, deliver, acknowledge, archive.
 #
 # ═══ THE DELIVERY STATE MACHINE ═══════════════════════════════════════════════
@@ -334,7 +337,8 @@ mail_send() {
         printf 'body-sha256: %s\n' "$sha"
         printf 'body-bytes: %s\n' "$bytes"
         # A held notice: delivered, never a wake reason by itself (see mail_pending_wake_count).
-        (( nowake && ! forcewake )) && printf 'wake: no\n'
+        # An explicit --wake is recorded too: a parked seat wakes only for mail that asked to.
+        if (( forcewake )); then printf 'wake: yes\n'; elif (( nowake )); then printf 'wake: no\n'; fi
         (( ${#resolved[@]} > 1 )) && printf 'broadcast-to: %s\n' "$(IFS=,; echo "${resolved[*]}")"
         printf -- '---\n\n'
         cat "$body"
@@ -496,26 +500,34 @@ _recent_record() {
 }
 
 # ─── Which inbox mail wakes a seat ────────────────────────────────────────────
-# A notice sent with `--no-wake` carries a `wake: no` header line. It is delivered like any
-# other mail, but it is not a reason to wake the seat: the poller counts only the rest. It is
-# still in the inbox, so the next real wake (mail, heartbeat) prints it in full through
-# mail_deliver, under the same shown-once and summary rules as every other message.
-# Only the header block is read, so a body that happens to contain the same line is not a header.
-mail_is_nowake() {
-  awk 'NR==1 && $0!="---"{exit 1} NR>1 && $0=="---"{exit !f} $0=="wake: no"{f=1}' "$1" 2>/dev/null
+# A mail's wake preference is an optional `wake:` header line, written by `send`:
+#   wake: no    sent with --no-wake: delivered, never a wake reason by itself
+#   wake: yes   sent with --wake: wakes the seat even while it is parked
+#   (absent)    an ordinary mail: wakes the seat, unless the seat is parked
+# A mail that does not wake is still in the inbox, so the next real wake prints it in full through
+# mail_deliver, under the same shown-once and summary rules as every other message. Only the header
+# block is read, so a body that happens to contain one of these lines is not a header.
+mail_wake_header() {   # <file> -> yes | no | "" (nothing printed)
+  awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{exit} $0=="wake: no"{print "no"; exit} $0=="wake: yes"{print "yes"; exit}' "$1" 2>/dev/null
 }
+mail_is_nowake() { [[ "$(mail_wake_header "$1")" == "no" ]]; }
 
-# mail_pending_wake_count <seat> — regular inbox messages that justify a wake.
+# mail_pending_wake_count <seat> — regular inbox messages that justify a wake: not a no-wake notice,
+# and, while the seat is parked, only mail that explicitly asked to wake it.
 mail_pending_wake_count() {
-  local seat="$1" f n=0
+  local seat="$1" f n=0 v parked=0
+  command -v seat_park_active >/dev/null 2>&1 && seat_park_active "$seat" && parked=1
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    mail_is_nowake "$f" || n=$((n+1))
+    v="$(mail_wake_header "$f")"
+    [[ "$v" == "no" ]] && continue
+    (( parked )) && [[ "$v" != "yes" ]] && continue
+    n=$((n+1))
   done < <(find "$MAIL_DIR/$seat" -maxdepth 1 -type f -name '*.md' 2>/dev/null)
   echo "$n"
 }
 
-# mail_has_held <seat> — 0 when the inbox holds at least one no-wake notice.
+# mail_has_held <seat> — 0 when the inbox holds at least one mail that is not (yet) a wake reason.
 mail_has_held() {
   local seat="$1" f
   while IFS= read -r f; do

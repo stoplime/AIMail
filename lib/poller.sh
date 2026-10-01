@@ -482,6 +482,14 @@ _poller_loop() {
       fi
     fi
 
+    # ─── A parked seat (aimail seat park) stays armed but is not woken by anything else: the heartbeat
+    #    below is skipped too. Only mail sent with --wake got past the count above. `hb_park` keeps the
+    #    heartbeat honest, so the dashboard reads a deliberate park as PARKED rather than hung.
+    if seat_park_active "$seat"; then
+      hb_park "$seat"; instance_beat "$seat"
+      sleep "$interval"; continue
+    fi
+
     # ─── Heartbeat: the fleet-quiet safety net (see the comment above the loop) ─
     if (( heartbeat_sec > 0 )) && (( $(now_epoch) >= hb_deadline )); then
       echo "WAKE=heartbeat: no mail for ${heartbeat_sec}s — checking in anyway (fleet-quiet safety net, not a mail delivery)."

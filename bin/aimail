@@ -35,6 +35,15 @@ SEATS (the address space — a name is only an address if it is registered)
   aimail seat retire <name> [successor]     stop accepting mail, say what to use
   aimail seat unretire <name> [desc]        reverse a mistaken/stale retirement — back to active
   aimail seat resolve <name>                what would this name deliver to?
+  aimail seat park <seat> (--until <time> | --trigger "<event>") --reason "<why>"
+                                             hold ordinary mail for the seat (its poller stops waking it;
+                                             `send --wake` mail still does); shown in full on the next wake
+  aimail seat unpark <seat> [--expensive-ok "<reason>"]
+                                             REFUSED while the park is under 5 hours old (AIMAIL_PARK_GUARD_HOURS):
+                                             a cold wake costs more than keeping the seat warm. The bypass
+                                             reason is logged.
+  aimail seat cold-watch [--dry-run]         cron every 10 min: a seat idle 45+ min and not parked gets ONE
+                                             no-wake alert to the supervisor per idle stretch
   aimail seat confirm <seat> [--model <id>]  from INSIDE the seat's own session: record
                                              the account, session id and model it is
                                              CERTAIN of (the persisted seat record;
@@ -352,7 +361,11 @@ case "$cmd" in
       launch)  [[ $# -ge 2 ]] || refused "usage: aimail seat launch <seat> <account> [--model <id>] [--cwd <dir>] [--prompt-file <p>]"
                source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/placement.sh" 2>/dev/null || true
                source "$_SELF/../lib/seatmigrate.sh"; ensure_dirs; seat_launch "$@" ;;
-      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | unretire | resolve | confirm | record | records | sessions | set-session | reset-session | locate | migrate | launch" ;;
+      # ─── parking with a cost guard (lib/park.sh) ───
+      park)    source "$_SELF/../lib/park.sh"; seat_park_cmd "$@" ;;
+      unpark)  source "$_SELF/../lib/park.sh"; seat_unpark_cmd "$@" ;;
+      cold-watch) source "$_SELF/../lib/fleet.sh"; source "$_SELF/../lib/budget.sh"; source "$_SELF/../lib/park.sh"; seat_cold_watch "$@" ;;
+      *)       refused "unknown 'seat' subcommand: '${sub:-（none）}'" "Try: list | add | retire | unretire | resolve | park | unpark | cold-watch | confirm | record | records | sessions | set-session | reset-session | locate | migrate | launch" ;;
     esac ;;
 
   send)    ensure_dirs; mail_send "$@" ;;

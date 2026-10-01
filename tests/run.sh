@@ -4654,6 +4654,19 @@ else
   FAIL=$((FAIL+1)); FAILURES+=("tests/daily_report.sh produced no summary line (rc=$DR_RC)")
 fi
 
+section "seat parking and cold-seat watchdog — tests/park.sh (standalone script, folded in)"
+PK_OUT="$(bash "$REPO/tests/park.sh" 2>&1)"; PK_RC=$?
+printf '%s\n' "$PK_OUT" | sed 's/^/  /'
+_pk_nums="$(printf '%s\n' "$PK_OUT" | grep -oE 'park: [0-9]+ passed, [0-9]+ failed' | grep -oE '[0-9]+')"
+PK_PASS="$(sed -n '1p' <<<"$_pk_nums")"
+PK_FAIL="$(sed -n '2p' <<<"$_pk_nums")"
+if [[ -n "$PK_PASS" && -n "$PK_FAIL" ]]; then
+  PASS=$((PASS+PK_PASS)); FAIL=$((FAIL+PK_FAIL))
+  (( PK_FAIL == 0 && PK_RC == 0 )) || FAILURES+=("tests/park.sh reported $PK_FAIL failure(s), rc=$PK_RC (see output above)")
+else
+  FAIL=$((FAIL+1)); FAILURES+=("tests/park.sh produced no summary line (rc=$PK_RC)")
+fi
+
 section "doctor"
 # doctor checks the real tree's git hooks, which the throwaway copy $AIMAIL points at does not have
 AIMAIL="$REPO/bin/aimail" accepts "doctor runs"  -- doctor

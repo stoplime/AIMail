@@ -458,6 +458,37 @@ For the operator to install, once a day at 23:55 local time:
 55 23 * * * aimail budget report --mail >> report.log 2>&1
 ```
 
+**Seat parking with a cost guard.** A seat that has nothing to do for hours should be parked on purpose, not
+left to go cold by accident: after about an hour of silence its context falls out of the provider's cache and
+the next wake pays full price.
+
+```
+aimail seat park <seat> (--until <time> | --trigger "<event>") --reason "<why>"
+aimail seat unpark <seat> [--expensive-ok "<reason>"]
+aimail seat cold-watch [--dry-run]
+```
+
+`park` writes a state file (`seat_park_<seat>` under the state directory). A parked seat's poller stays armed
+and does not wake for ordinary mail; mail sent with `send --wake` still wakes it, and everything held is
+printed in full on the next real wake. `--until` takes `YYYY-MM-DD`, `'YYYY-MM-DD HH:MM'`, `+3d` or `+12h`; a
+park with `--until` ends by itself and an expired park no longer holds mail. `unpark` is REFUSED while the park is
+under 5 hours old (`AIMAIL_PARK_GUARD_HOURS`, default 5): waking a seat that went cold when it was parked costs more
+than keeping it warm would have. The refusal states the park time and the time left; `--expensive-ok "<reason>"`
+bypasses it and appends seat, time and reason to `park_overrides.log` (append-only). `budget pool` ends with a
+per-seat section: account, parked yes/no, parked-for, until or trigger, reason, whether an un-park now would be
+refused, and for unparked seats the idle time since the last turn ended (`?` when unknown).
+This is separate from the budget throttle park above, which is per account and unchanged.
+
+`seat cold-watch` is the watchdog: a seat idle `AIMAIL_COLD_IDLE_MIN` minutes (default 45; idle = time since its
+last turn ended in the stop hook's event log) and not parked gets ONE `--no-wake` alert to the seat named by
+`AIMAIL_SUPERVISOR`, "<seat> goes cold in about 15 minutes: give it work or park it". The stretch is recorded, so
+there is no second alert until the seat has been active and idle again; a seat with no stop record is unknown,
+never idle. For the operator to install, every 10 minutes:
+
+```cron
+*/10 * * * * aimail seat cold-watch >> cold-watch.log 2>&1
+```
+
 Per-account caps:
 
 ```bash
