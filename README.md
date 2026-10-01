@@ -1,53 +1,94 @@
 # aimail
 
-File-based mail for a fleet of AI coding sessions that cannot see each other's context.
+File-based mail, work claims and budget control for a fleet of AI coding
+sessions that cannot see each other's context.
 
-It is a port of a system that ran a five-seat fleet for five weeks and carried
-13,327 messages. **This repo exists because that system was gitignored**, so no
-claim about any of its instruments could be dated, and roughly one message in
-eleven was about the coordination system rather than the work.
+A fleet of sessions shares nothing but the disk. `aimail` gives each session an
+address (a *seat*), a way to be woken when mail arrives, and a set of mechanical
+guards so that a request, a claim or a stop notice cannot quietly fall on the
+floor. Everything is plain files and bash; there is no server.
+
+Contents: [Install](#install) · [Quick start](#quick-start) ·
+[Seats and mail](#seats-and-mail) · [Output states](#the-four-output-states) ·
+[Fleet dashboard](#the-fleet-dashboard) · [Asks and prompts](#asks-prompts-and-the-drop-prevention-guards) ·
+[Claims](#claims) · [Landing and git guards](#landing-and-git-guards) ·
+[Budget](#budget-checkpoints-and-unattended-running) · [Hooks](#hooks-and-kill-switches) ·
+[Configuration](#configuration) · [Tests](#tests) · [Known limits](#known-limits)
 
 ---
 
-## The five-minute version
+## Install
+
+Requirements: `bash`, `git`, `python3`, `jq`, `flock`, `sha256sum`, `curl`.
+The budget commands also use `ccusage` (and `node`), and the session commands
+(`seat locate`, `seat migrate`, `sessions`) expect the `claude` CLI.
 
 ```bash
 git clone <this repo> && cd aimail
-cp etc/aimail.conf.example etc/aimail.conf     # edit AIMAIL_ROOT
+cp etc/aimail.conf.example etc/aimail.conf     # gitignored; set AIMAIL_ROOT at least
 export PATH="$PWD/bin:$PATH"
-
-aimail seat add main "General work"
-aimail seat add backend "Backend work" "be"
-
-aimail send --to backend --from main --subject "gate is free" --body-file ./msg.md
-aimail poll-persistent backend   # arm as a Monitor task (30-min cap, re-arm at expiry); never exits on a wake
-aimail poll backend        # DEPRECATED 2026-09-21 (still works, warns): exits when mail lands
-aimail ack backend --all   # after acting on it
+aimail doctor                                   # checks this installation
 ```
 
-Run `aimail doctor` after install. It checks the six things that have actually
-gone wrong.
+`etc/aimail.conf` is the only deployment-specific file. Mail and state live
+under `AIMAIL_ROOT` (default `~/.aimail`), which must be outside the repo: mail
+is machine-local coordination, not source.
+
+## Quick start
+
+```bash
+aimail seat add main "General work"
+aimail seat add backend "Backend work" "be"      # a name, a description, aliases
+
+aimail send --to backend --from main --subject "gate is free" --body-file ./msg.md
+aimail poll-persistent backend    # run as a Monitor/background task; see "Polling"
+aimail unread backend             # what is waiting, by id
+aimail ack backend <id>           # after acting on it
+```
+
+Start every new session with `aimail session [seat]`. It checks, read-only, the
+budget mode, the role handover, the poller, and each Stop-hook registration, and
+prints the exact command that fixes anything wrong.
 
 ---
 
-## What it refuses to do, and why
+## Seats and mail
 
-Every refusal below replaces an incident. The tool enforces these rather than
-documenting them, because **a rule in a document loses to recall at the moment
-of use** — four seats broke the same documented rule within one hour of it being
-written down.
+A **seat** is a registered name. A name that is not registered is not an
+address: `aimail send` refuses it, and `aimail seat resolve <name>` says what a
+name would deliver to. Seats can have aliases and can be retired
+(`seat retire <name> [successor]`) or restored (`seat unretire`).
 
-| Refusal | The incident behind it |
+```
+aimail send --to <seat> [--to <seat> ...] --from <seat> --subject <s> --body-file <path>
+aimail send ... < body.md          # the body may also arrive on stdin
+aimail unread <seat>               # un-acked mail: id, sender, subject, size
+aimail show <seat> <id>            # re-print one message in full
+aimail recent <seat> [N]           # last N ids this seat has ever seen
+aimail where <seat> <pattern>      # which state is a message in
+aimail ack <seat> <id>...          # archive what has been acted on
+```
+
+### What `send` refuses, and why
+
+Every refusal replaces an incident. The tool enforces these rather than
+documenting them, because a rule in a document loses to recall at the moment of
+use.
+
+| Refusal | The failure behind it |
 |---|---|
-| Sending to an unregistered name | A directory named `metrics` existed beside the real seat `metrics-report`. No poller watched it. Mail there was never read and never bounced. |
-| `--body "some string"` | A mail composed with an unquoted heredoc had every fenced code block eaten by shell expansion. The headings survived, so it read as *asserted without evidence* rather than as *damaged* — and the sender's delivery check reported 5/5 because it counted files. |
-| An unbalanced ``` fence | The detection signature of the above, caught before delivery. |
-| `--date` / caller-supplied timestamps | Every `HH:MM` in one seat's record was ~7.5h fast. A second seat then advanced its clock *from those headers*, so the drift grew between seats. |
-| Second-person pronouns in a broadcast | A correction sent to five seats saying "Your claim…" was resolved by the wrong seat, which then had to prove it never made the claim. |
-| Missing `--from` | 118 of 122 messages once omitted it, so "what did this seat send?" returned **zero** while the seat had sent 122. |
-| Unknown verbs and flags | `gate.sh who` — which reads exactly like a status query — created a lock holder named `who` and started a full test suite. |
+| Sending to an unregistered name | A directory existed beside the real seat's. No poller watched it, so mail there was never read and never bounced. |
+| `--body "some string"` | A body composed with an unquoted heredoc had its fenced code blocks eaten by shell expansion. The headings survived, so it read as asserted-without-evidence rather than as damaged. |
+| An unbalanced code fence | The detection signature of the above, caught before delivery. |
+| `--date` or any caller-supplied timestamp | One seat's clock ran fast, and another seat advanced its own clock from those headers, so the drift grew. |
+| Second-person pronouns in a broadcast | A correction addressed to "you" went to five seats and the wrong one answered it. Use the third person, send individually, or pass `--broadcast-second-person-ok` when quoting someone whose referent is unambiguous. |
+| A missing `--from` | Mail without a sender cannot be traced: "what did this seat send?" returned nothing. |
+| A sender that is not the calling session's registered seat | Mail must come from the seat's own session (`AIMAIL_SEND_IDENTITY_CHECK=0` disables it; a human's decision). |
+| A work mail with no open ask | See [asks](#asks-prompts-and-the-drop-prevention-guards). |
+| A GREEN verdict missing its evidence lines | A subject containing an uppercase `GREEN` is a licence to land, so the body must carry `Producer: <file:line>`, `Consumer: <file:line>` (or `Docs-only: <reason>`) and a `Fleet tests:` line, each starting its own line, and must not use the bare word "hold". `AIMAIL_SEND_GREEN_GUARD=0` disables it. |
+| Unknown verbs and flags | A status-looking word once created a lock holder with that name and started a full test run. |
 
-## The delivery state machine
+### Delivery
 
 ```
   send              poll                   ack
@@ -57,258 +98,379 @@ written down.
               re-printed every poll until acked
 ```
 
-**`archive/` is not reachable by delivery.** The predecessor's poller printed a
-message and archived it in one step, so if the agent never opened that task
-output the mail was archived unread with no trace. It happened to a stop-work
-notice, and the seat kept building cancelled scope for fifteen minutes.
+`archive/` is not reachable by delivery. Delivery moves mail to `unacked/`; only
+`aimail ack` archives it. Un-acked mail is shown as a one-line summary on every
+later poll (`aimail show` re-prints it in full), so a delivery nobody read is
+visible rather than silently lost. A message body is printed in full exactly once.
 
-Here, delivery moves mail to `unacked/` and only `aimail ack` archives it.
-Un-acked mail is re-printed on every subsequent poll. A delivery nobody read is
-now self-healing instead of silent — which also closes the detached-poller gap,
-since a poller nobody is waiting on cannot ack.
+- `aimail ack <seat> --all` also needs a matching, recent `deliver`
+  (`AIMAIL_ACK_TTL`, default 600 s) **and** `--sha <prefix>[,<prefix>...]`, an
+  8+ hex-character prefix of each target's `body-sha256` header, taken from the
+  delivery you just read. `--force` skips both and is for a deliberate unread
+  sweep only.
+- Delivery is size-capped (`POLLER_DRAIN_MAXB`). The remainder stays queued; it
+  is never consumed.
+
+### Polling
+
+```
+aimail poll-persistent <seat>    # the normal reader: stays armed, prints each delivery
+aimail poll <seat>               # deprecated one-shot: exits on the first delivery
+aimail deliver <seat>            # deliver once, no loop (for tests)
+```
+
+Run a poller as its own standalone background task (for example a Claude Code
+Monitor) with nothing chained to it: no `&`, no `;`, no pipe into `tail`. A
+chained poller is orphaned and the harness loses track of it. A persistent
+poller is capped at 30 minutes; re-arm it when it ends, and run only one at a
+time per seat. A poller's exit is itself a delivery: read its output before
+doing anything else.
+
+---
 
 ## The four output states
 
-Every instrument reports exactly one, with distinct exit codes:
+Every instrument reports exactly one state, with a distinct exit code.
 
 | State | Exit | Meaning |
 |---|---|---|
 | measured | 0 | a real reading |
-| refused | 3 | you asked for something the tool will not do |
-| unmeasurable | 4 | it could not measure — **not** zero, **not** clean |
+| refused | 3 | the request is something the tool will not do |
+| unmeasurable | 4 | it could not measure; this is **not** zero and **not** clean |
 | error | 1 | it broke |
 
-`unmeasurable` exists because the recurring failure was never a crash, it was *a
-plausible number*: a 384% projection, a 0.00%/hour burn rate read as "fleet idle,
-poke it", a census printing "0 of 0" as an all-clear. **"Unmeasurable" and "zero"
-are different claims, and zero reads as safe in whichever direction is dangerous.**
+`unmeasurable` exists because the recurring failure was never a crash. It was a
+plausible number: a 384% projection, a 0.00%/hour burn read as "fleet idle", a
+census printing "0 of 0" as an all-clear. Zero reads as safe in whichever
+direction is dangerous.
+
+---
 
 ## The fleet dashboard
 
 ```
-aimail fleet
+aimail fleet                  # one row and one verdict per seat
+aimail sessions [--json]      # one row per session, each judged on its own evidence
+aimail context [seat...]      # each live session's current context size
+aimail whoami                 # a fresh session finds its own seat
 ```
 
 ```
-SEAT             POLLER      LAST-STOP  QUEUED  UNACK  VERDICT
-main             RE-ARMING   2m              0      1  WORKING — mid-turn, reading mail. ⛔ DO NOT NUDGE
-review           ARMED       14m             2      0  IDLE & REACHABLE — mail will wake it, send work
-backend          CRASHED     51m             0      3  ⛔ UNREACHABLE — killed, not finished. Only a human can restart it
+SEAT      POLLER     LAST-STOP  QUEUED  UNACK  VERDICT
+main      RE-ARMING  2m              0      1  WORKING: mid-turn, reading mail. Do not nudge
+review    ARMED      14m             2      0  IDLE & REACHABLE: mail will wake it
+backend   CRASHED    51m             0      3  UNREACHABLE: killed, not finished
 ```
 
-**The distinction this exists for:** a poller is down both when a seat is
-mid-turn reading its mail and when it was killed. Those demand opposite
-responses, and a process sample cannot tell them apart — which produced both
-failure directions repeatedly: redundant nudges, and a seat sitting unreachable
-for ~25 minutes.
-
-Two event sources, neither of which is a `pgrep`:
+A poller is down both when a seat is mid-turn reading its mail and when the
+seat was killed. Those need opposite responses, and a process sample cannot tell
+them apart. So the dashboard uses two event sources instead of `pgrep`:
 
 - **The poller's heartbeat records why it stopped.** An exit that says
-  `reason=mail` is a poller that did its job. An absent heartbeat with *no exit
-  record* is a poller that was killed. Finished, killed and crashed otherwise
-  leave identical evidence — no process — so the finishing path has to write
-  something the other two cannot.
+  `reason=mail` is a poller that did its job. An absent heartbeat with no exit
+  record is a poller that was killed.
 - **The stop hook logs the moment a session ends a turn**, which is what "idle"
-  actually means. A process sample can never answer "when did this last stop".
+  actually means.
 
-Six states where a process count had two: `ARMED`, `RE-ARMING`, `STALLED`,
-`WEDGED`, `CRASHED`, `NEVER`. `AIMAIL_REARM_GRACE` (default 180s) names the
-window in which a fired poller is still expected to re-arm — reporting that
-window as "down" is the most common false alarm in fleet supervision.
+Verdicts: `ARMED`, `RE-ARMING` (the poller fired and the seat is reading; it has
+`AIMAIL_REARM_GRACE`, default 180 s, to re-arm), `STALLED` (past
+`AIMAIL_STALL_ALERT`, default 1200 s), `WEDGED`, `CRASHED` (no process and no
+exit record; the one state that needs a human) and `NEVER`.
 
-## Drop-prevention guards (prompt ledger, parking, work mail, digest)
+`fleet` counts seats, not sessions: a seat with four concurrent sessions has one
+heartbeat and one row. Use `aimail sessions` when the question is which session
+is alive; `sessions --prune` removes only registrations proven to belong to
+ended sessions.
 
-Four mechanical guards so that something the owner asked for cannot quietly fall out of the
-fleet's attention. Each one is exercised by `tests/drop_guards.sh` (a refusal arm paired with an
-acceptance arm for every guard).
-
-1. **Prompt ledger + triage gate.** `hooks/prompt_guard.sh capture` (a UserPromptSubmit hook)
-   records every owner prompt as `untriaged` (machine text such as harness notifications and
-   poller wakes is skipped; `AIMAIL_AUTOMATED_PROMPT_RE` names it) and tells the session the
-   prompt id. `hooks/prompt_guard.sh gate` (a Stop hook) refuses to end the turn while that
-   session still has an untriaged prompt. Each ends in exactly one of
-   `aimail prompt triage <p####> --ask <k####>` (the ask must exist in the ledger) or
-   `--no-ask "<reason>"` (a real reason, 8+ characters); `aimail ask add … --prompt <p####>`
-   adds the ask and triages in one step. The gate blocks at most once per stop attempt
-   (`stop_hook_active`), fails open on any error, and a block leaves the prompt `untriaged`, so
-   it shows in the digest and blocks the next stop too. Wiring, in the project's
-   `.claude/settings.json`:
-   `hooks.UserPromptSubmit[].hooks[] = {"type":"command","command":"bash <aimail>/hooks/prompt_guard.sh capture"}` and
-   `hooks.Stop[].hooks[] = {"type":"command","command":"bash <aimail>/hooks/prompt_guard.sh gate"}`.
-   Kill switches (a human's decision): `AIMAIL_PROMPT_CAPTURE=0`, `AIMAIL_PROMPT_GATE=0`.
-2. **Parking needs a date or a named trigger.** `aimail ask touch|park <id> … --waiting-on <who>`
-   is refused unless it carries `--until <date>` (`YYYY-MM-DD`, `'YYYY-MM-DD HH:MM'`, `+3d`, `+12h`;
-   must be in the future) or `--trigger "<the named event that ends the park>"`. An expired
-   `--until` un-parks the row: it is listed STALE and the sweep mails it again. Clearing a park
-   (`--waiting-on ''`) needs neither. Parks written before this rule stay parked and are flagged
-   "no date or trigger (legacy park)" in the digest.
-3. **A work mail cites an ask.** `aimail send` refuses a mail whose subject announces work
-   (`Task:`, `Assignment:`, `Assign:`, `Work request:`; `AIMAIL_WORK_SUBJECT_RE`) unless the subject
-   or body cites a ledger id (`k####`, or an imported `a##`) that exists and is still open.
-   Kill switch (a human's decision): `AIMAIL_WORK_MAIL_GUARD=0`.
-4. **The open-asks digest.** `aimail ask owner-digest [--owner <seat>]` prints every open ask with
-   its seat, age, state, park date or trigger and next step, plus the number of owner prompts never
-   triaged.
-
-**An owner-verdict ask needs an end.** `ask add --check false` (a row only a person can close) is refused without `--until <date>` or `--trigger "<event>"`, the same rule as a park. A row past its `--until` reads `OWNER-OVERDUE` in `ask list` and is mailed as stale by the sweep; `ask touch <id> --until <date>` renews it. A trigger-only row keeps waiting until it is closed or touched.
-
-## Migrating an existing mailbox
-
-```bash
-aimail migrate /path/to/old/mailbox --dry-run   # always first
-aimail migrate /path/to/old/mailbox
-```
-
-Copies — never moves. The source stays intact and running, the import is
-idempotent and resumable, archives are re-sharded by each message's **write**
-mtime so the chronology survives, and `ROLE.md` moves out of the inbox to
-`$AIMAIL_ROOT/roles/` so it can never be delivered as mail.
-
-## Testing
-
-```bash
-bash tests/run.sh                    # 81 tests
-bash hooks/stop_guard.sh selftest    # 5 arms, also run by the suite
-```
-
-Every guard is exercised with an input that must trip it (①), paired with a
-positive control on the nearest valid input so an always-refusing guard cannot
-hide (③).
-
-Mutation-verified: disabling the fence guard, the ack gate, the broadcast-pronoun
-guard, the crashed/re-arming distinction, the exit-record branch, the
-archive-traversal fix, the checkpoint marker ordering, or the poller's park
-behaviour each turns the suite red, and it returns green when restored.
-
-⚠ One of those mutations initially reported a false all-clear, because the `sed`
-meant to apply it silently did not match. **A decoy that cannot apply its patch
-proves nothing** — assert the patch landed before drawing any conclusion from the
-result. The same shape appeared in the stop-hook selftest, where two "allow" arms
-passed while the guard was switched off entirely.
-
-## Budget, checkpoint, and unattended overnight running
-
-```bash
-aimail budget status          # the block, the last reading AND ITS AGE, the schedule
-aimail budget callout 42      # record a /usage reading — a human's word, authoritative
-aimail budget probe           # hit the unofficial API and record it automatically
-```
-
-**The one idea this is built around: the block boundary is measurable, the
-percentage is not — through anything OFFICIAL.** Everything that must work
-unattended is keyed on the boundary; only advisory output is keyed on the
-percentage.
-
-`/usage` shows the official session and weekly percentages and there is **no
-documented way to read it** — not via statusLine, hooks, files, or a published
-API ([issue #20636](https://github.com/anthropics/claude-code/issues/20636),
-closed unimplemented). `budget callout` exists because of that, and a human's
-reading stays the one CLAIM nothing else can substitute for.
-
-`budget probe` is different in kind, not just in convenience: it hits an
-**unofficial, undocumented** endpoint (the same one Claude Code's own `/status`
-command calls internally) using the OAuth token Claude Code already stores
-locally. Confirmed live and working, but unpublished — it could change shape or
-disappear in any release with zero notice, and it is not the same claim as a
-human reading `/usage`, so its ledger rows are tagged `probe`, not `callout`,
-and `budget status` labels them accordingly. Wire it into cron for continuous
-freshness; keep `budget callout` as the fallback for whenever the probe breaks.
-
-The *boundary*, though, is knowable: a block starts at your first message and
-runs exactly 5 hours, and `ccusage` models that as an anchored block. So the
-checkpoint — *"write your ROLE.md while there is still budget to write it"* —
-fires on the clock, hours of warning, no percentage involved. When an account is
-switched every session's context switches with it, so those ROLE.md files **are**
-the handover.
-
-⛔ **Do not "fix" a boundary over-read by rescaling a budget.** A *trailing* 5h
-window over-reads right after a reset by construction — it still reaches into the
-dead block. Rescaling to correct that makes it under-report for the rest of the
-window, inventing headroom. Anchored blocks avoid the artefact entirely.
-
-### Cron — because a session's children die with the session
+Cron entries that keep the fleet honest:
 
 ```cron
-*/5 * * * * /path/to/aimail/bin/aimail budget autopilot >> ~/.aimail/state/autopilot.log 2>&1
+*/5 * * * *  aimail fleet sweep    >> sweep.log 2>&1      # mails a supervisor about CRASHED/WEDGED/STALLED seats
+*/5 * * * *  aimail fleet watchdog >> watchdog.log 2>&1   # supervisor liveness; wakes or escalates
+* * * * *    aimail fleet pressure >> pressure.log 2>&1   # RAM/CPU/swap pressure; optional, per minute
 ```
 
-`autopilot` ramps if the block rolled, checkpoints at `AIMAIL_CHECKPOINT_MIN`
-before the end, and parks at `AIMAIL_PARK_MIN`. It belongs in cron because a
-`run_in_background` task is a *child of the session* — it dies exactly when the
-session dies, which is the scenario night mode exists to survive.
-
-### Park is not disarm
-
-Setting the throttle flag makes every poller **sleep on it and wake itself at the
-ramp**. Verified end to end in the suite: a parked poller stays alive, mail sent
-during the park stays queued rather than being consumed, and the poller exits on
-its own when the ramp passes — no human, no coordinator.
-
-A parked poller costs nothing and wakes itself. A **disarmed** poller also costs
-nothing and *never wakes* — only a human can restart it. Identical on a token
-bill, opposite in recoverability. Never tell a seat to disarm.
-
-### Per-account caps
-
-```bash
-AIMAIL_CAP_DEFAULT=90
-AIMAIL_CAP_shared=80     # a shared account must park lower
-```
-
-The account is read from the `~/.claude` symlink target, which is what the VS
-Code profile switcher repoints. That also means each account has its own
-transcripts, so anything derived from them is already per-account. Overrunning on
-a shared account spends someone else's tokens, and they are not in the
-conversation to object — nobody should learn which account they are on from a
-lockout.
-
-## Status
-
-Measured against the toolset it replaces:
-
-| Predecessor tool | Status |
-|---|---|
-| `poller.sh` + 7 per-seat wrappers | ✅ one `aimail poll <seat>`, plus the ack gate and heartbeat |
-| `poller_health.sh`, `poller_fleet_sweep.sh` | ✅ subsumed by `aimail fleet` |
-| `fleet_idle.sh` | ✅ the `LAST-STOP` column |
-| stop hook | ✅ `hooks/stop_guard.sh`, 5-arm selftest |
-| `staleness_check.sh` | 🟡 partial — `status` shows un-acked counts, no age alarm |
-| `fleet_watch.sh` (progress watchdog) | ❌ not ported |
-| `fleet_dashboard.sh` (HTML page) | ❌ not ported — terminal only |
-| `gate.sh`, `gate_slot.sh`, `preland.sh`, `preflight.sh`, `verify_refs.sh` | ❌ not ported |
-| `budget.sh`, `token_watch.py`, `burn.py`, `night_gate.sh`, `night_watchdog.sh` | ✅ replaced by `aimail budget` on anchored `ccusage` blocks |
-
-⚠ Still missing for a full cutover: the **gate** (suite serialisation) and
-`preland` (the uncommitted-worktree collision check). Those protect a shared test
-suite and a shared trunk; nothing here replaces them yet.
-
-[docs/PORTING.md](docs/PORTING.md) maps every known defect to prevented, partial,
-or not-yet-ported, and lists the regressions not to reintroduce.
+Seat sessions can be located and moved between accounts with
+`aimail seat locate|confirm|record|migrate|launch|sessions`
+(see [docs/cli_account_migration.md](docs/cli_account_migration.md)). Migration
+resumes the seat's own session by default; never `kill` a session by pid.
 
 ---
 
-## ⚠ KNOWN ISSUES — read before changing the poller, the fleet view, or the budget path
+## Asks, prompts and the drop-prevention guards
 
-Three failure modes have been observed in production use. None is fully fixed; each is recorded here
-because the symptom is misleading enough to send the next person the wrong way.
+Four mechanical guards keep something a person asked for from quietly falling
+out of the fleet's attention. `tests/drop_guards.sh` exercises each one with a
+refusal arm and an acceptance arm.
 
-- **A clean exit can report `CRASHED`.** That is the one verdict meaning "no exit record — a human
-  must intervene", so a false positive pages someone for nothing. Observed nine times in one night
-  with zero true positives. ⛔ The cause is **not settled**, and the heartbeat file **overwrites its
-  own evidence** on the next poll — so any fix must begin by capturing what the check actually saw,
-  before changing what it does.
+**The ask ledger.** An *ask* is a task someone requested that must not be
+silently dropped.
 
-- **A stop instruction that ends with "stop" leaves a seat unreachable.** The poller exits on
-  delivery; a seat that stops without re-arming has no reader, and mail to it is written, verified,
-  and never seen. There is **no automated recovery** — nothing can wake a seat that cannot receive.
-  ▶ Any stop procedure must end with *re-arm, then stop*, in that order.
+```
+aimail ask add --owner <seat> --quote "<their words>" --next "<step>" --check '<shell predicate>' [--prompt <p####>]
+aimail ask touch <id> --by <seat> --state "<where it stands>" [--evidence <ref>] [--next "<step>"]
+aimail ask list [--owner <seat>] [--stale] [--all]      aimail ask show <id>
+aimail ask sweep                  # cron, every 10 minutes
+aimail ask owner-digest [--owner <seat>]
+aimail ask withdraw <id> --owner-approved "<quote>"
+```
 
-- **An `active` seat with no reader accepts mail silently.** Delivery succeeds, the digest verifies,
-  and nothing ever reads it. `mail_send` now warns when a recipient has no poller heartbeat, but the
-  underlying registry state is still legal — retire the seat, or start a reader.
+`--check` decides when the row closes on its own: `ask sweep` runs it and closes
+the row on exit 0. A row untouched for `AIMAIL_ASK_STALE` seconds is stale, and
+the sweep mails its seat and the supervisor once per stale episode; a `touch`
+ends the episode. There is no `ask done`; the single manual close is `withdraw`
+with a quoted approval.
 
-⛔ **The standing caution, learned the hard way:** for a fleet using it, `aimail` is the *only*
-channel between seats. A bad patch here does not produce a false alarm — **it produces silence**, and
-silence is indistinguishable from everyone being busy. Change it in daylight, with someone watching,
-and never in the middle of an incident.
+1. **Prompt ledger and triage gate.** `hooks/prompt_guard.sh capture` (a
+   UserPromptSubmit hook) records every human prompt as `untriaged` and tells
+   the session the prompt id; machine text such as harness notifications and
+   poller wakes is skipped (`AIMAIL_AUTOMATED_PROMPT_RE`). `hooks/prompt_guard.sh gate` (a
+   Stop hook) refuses to end the turn while the session still has an untriaged
+   prompt. Each ends in `aimail prompt triage <p####> --ask <k####>` (the ask
+   must exist) or `--no-ask "<reason>"` (a real reason, 8+ characters);
+   `ask add ... --prompt <p####>` adds the ask and triages in one step. Only a
+   registered seat's session is captured or gated. The gate blocks at most once
+   per stop attempt and fails open on error.
+2. **A park needs an end.** `ask touch|park <id> ... --waiting-on <who>` is
+   refused unless it carries `--until <date>` (`YYYY-MM-DD`,
+   `'YYYY-MM-DD HH:MM'`, `+3d`, `+12h`; must be in the future) or
+   `--trigger "<the named event that ends the park>"`. An expired `--until`
+   un-parks the row: it reads STALE and the sweep mails it again. Clearing a park
+   (`--waiting-on ''`) needs neither.
+3. **A work mail cites an ask.** `aimail send` refuses a subject that announces
+   work (`Task:`, `Assignment:`, `Assign:`, `Work request:`;
+   `AIMAIL_WORK_SUBJECT_RE`) unless the subject or body cites a ledger id that
+   exists and is still open.
+4. **The open-asks digest.** `aimail ask owner-digest` prints every open ask with
+   its seat, age, state, park date or trigger and next step, plus the number of
+   prompts never triaged.
+
+**A person-only row needs an end too.** `ask add --check false` (a row only a
+person can close) is refused without `--until <date>` or `--trigger "<event>"`.
+A row past its `--until` reads `OWNER-OVERDUE` in `ask list` and is mailed as
+stale by the sweep; `ask touch <id> --until <date>` renews it. A trigger-only row
+keeps waiting until it is closed or touched.
+
+---
+
+## Claims
+
+```
+gateclaim.sh <key> <seat> --desc "why this claim was taken"    # exit 0 = you own it
+gateclaim.sh --release <key> <seat>
+gateclaim.sh --list                                            # who is doing what
+gateclaim.sh --canon <key>                                     # print the canonical key
+aimail claims [seat...]            # is each holder still advancing its claim?
+aimail claims block <key> <seat> <ref>      aimail claims unblock <key> <seat>
+```
+
+A claim is an atomic lock, taken before the work starts. It is the arbiter;
+announcing a claim by mail is not, because a mail-announced claim has a race
+window shorter than mail's own latency. Use it for any exclusive work item or
+gate, keyed by the bare ticket id or the commit sha. Keys are canonicalised
+(short and long forms of one sha, or two spellings of one ticket, collide into
+one lock). Always pass `--desc`: it is the "why", stable for the claim's life,
+and it makes `--list` a live board.
+
+`aimail claims` judges the (seat, claim) pair: `DOWN` (the holder's process is
+gone), `WORKING` (a live process in the claim's worktree, or a recent commit or
+mail naming the key), `BLOCKED` (a typed referent such as `gate:`, `lock:`,
+`seat:`, `human:` or `landing:` is checked live for dangling or cycles) or
+`STUCK` (alive, held, not blocked, no evidence past `AIMAIL_CLAIM_STUCK_SECONDS`;
+surfaced, never auto-released).
+
+**The claim gate refuses a stale owner.** A new `gateclaim.sh` claim by a seat
+that owns a stale open ask is refused and names the row, so a newer task cannot
+displace an older one by default. `--preempt-ok "<quote>"` records the quote on
+the row and proceeds. It never applies to `--release`, `--list` or `--canon`.
+
+---
+
+## Landing and git guards
+
+```
+aimail land <repo-path> <ref> <sha> --from <seat>
+```
+
+The one way to move a shared ref. It locks the (repo, ref), re-reads the live tip
+inside the lock, refuses unless the move is a real fast-forward, moves the ref
+with the three-argument `update-ref` (expected-old is the tip just read),
+verifies, and prints the log and stat for the landing mail. It never
+materialises a working tree. When a must-prove ref is configured, it also refuses
+without a `--gate-summary` that `bin/check_battery_summary.sh` accepts for the
+exact sha.
+
+Installable git hooks, each verified by an `aimail` check command:
+
+| Hook | Git hook type | What it does | Check |
+|---|---|---|---|
+| `hooks/main_only_landing_guard.sh` | `reference-transaction` | Refuses an update of a protected ref from any session not registered as the landing seat (plus the per-ref extras in `AIMAIL_LANDING_GUARD_ALLOW`), and any non-fast-forward or deletion (`AIMAIL_LANDING_GUARD_REQUIRE_FF`). | `aimail landing-guard` |
+| `hooks/sterility_guard.sh` | `pre-commit` | Refuses a commit whose staged diff adds a term from `AIMAIL_STERILITY_TERMS`. | `aimail doctor` |
+| `hooks/sterility_commit_msg_guard.sh` | `commit-msg` | The same, for the commit message. | `aimail commit-msg-guard` |
+| `hooks/sterility_push_guard.sh` | `pre-push` | Refuses any push from a non-human seat, and any outgoing commit carrying a sterility term. | `aimail push-guard` |
+
+Each check takes `--selftest`. A dangling symlink or a `core.hooksPath` into a
+vanished directory makes git run no hooks, silently, which is why the checks
+verify that a hook is installed **and resolvable**. `aimail session` and
+`aimail doctor` run them for the repos in `AIMAIL_LANDING_GUARD_REPOS`.
+
+Separately: `hooks/secret_read_guard.sh` (a PreToolUse hook) denies a command
+that would print secret **values** from an env-style file, `/proc/<pid>/environ`
+or a bare `env`/`printenv` dump into the transcript, while allowing names-only
+reads and sourcing; `hooks/secret_scan.sh` is the daily scan for secret values
+already sitting in plain text under given repo roots (prints counts and paths,
+never values).
+
+`bin/run_canonical_battery.sh` runs a downstream project's full test battery
+from a clean checkout of an exact sha, one at a time, and
+`bin/battery_queue.sh` queues them. `bin/check_battery_summary.sh` accepts a
+battery summary only when its tree matches the sha being landed.
+
+---
+
+## Budget, checkpoints and unattended running
+
+```
+aimail budget status          # block, last reading and its age, schedule, throttle
+aimail budget callout <pct>   # record a /usage reading: a human's word, authoritative
+aimail budget probe           # read usage from the live endpoint and record it
+aimail budget autopilot       # cron: checkpoint, then park, then ramp
+aimail budget checkpoint [--now]       aimail budget park [reason] | ramp
+aimail budget unpark <seat>            aimail budget night | day
+aimail budget account         # which account is active and its cap
+```
+
+The idea it is built around: the five-hour block **boundary** is measurable
+(`ccusage` models it as an anchored block), but the **percentage** is not,
+through anything official. Everything that must run unattended is keyed on the
+boundary; only advisory output is keyed on the percentage. A *checkpoint* fires
+on the clock, hours before the boundary: "write your role handover while there is
+still budget to write it". When an account is switched every session's context
+goes with it, so those handover files are the only continuity.
+
+`budget callout` records a human's `/usage` reading and is the one claim nothing
+else substitutes for. `budget probe` calls an unofficial, undocumented endpoint
+using the token Claude Code already stores; it could change or disappear in any
+release, so its rows are tagged `probe`, and when it fails it reports
+unmeasurable rather than guessing.
+
+A cap percentage is not a decision point for a seat. The cap is the safety
+margin, chosen deliberately; seeing usage approach it authorises nothing in
+either direction. Only the automated park and ramp machinery acts on it.
+
+```cron
+*/5 * * * * aimail budget autopilot >> autopilot.log 2>&1
+```
+
+`autopilot` ramps if the block rolled, checkpoints `AIMAIL_CHECKPOINT_MIN`
+before the end, and parks at `AIMAIL_PARK_MIN`. It belongs in cron because a
+background task is a child of the session and dies with it, which is the
+scenario unattended running exists to survive.
+
+**Park is not disarm.** Parking sets a flag; every poller sleeps on it and wakes
+itself at the ramp, so a parked poller costs nothing and recovers on its own. A
+disarmed poller also costs nothing and never wakes: only a human can restart it.
+Never tell a seat to disarm. `budget unpark <seat>` exempts one seat from the
+current park only and vouches for nothing about its usage.
+
+Per-account caps:
+
+```bash
+AIMAIL_CAP_DEFAULT=90
+AIMAIL_CAP_shared=80     # a shared account parks lower
+```
+
+The account is read from the `~/.claude` symlink target. Further budget commands:
+`budget history`, `seats`, `warnings` (50/80 crossings, one mail per level and
+window), `balance` and `act` (an announce-then-do balancer, off unless
+`AIMAIL_BALANCE_ACT=1`) and `placement` (which accounts may host a seat).
+
+---
+
+## Hooks and kill switches
+
+| Hook | Wired as | Purpose |
+|---|---|---|
+| `hooks/stop_guard.sh` | Stop | Will not let a session end its turn with no live poller; logs every turn end, which feeds the dashboard's LAST-STOP column. Register the session with `stop_guard.sh register <seat>`. |
+| `hooks/prompt_guard.sh capture` / `gate` | UserPromptSubmit / Stop | The prompt ledger. |
+| `hooks/supervisor_guard.sh` | Stop (supervisor seat only) | The supervisor cannot end a turn without having looked at the fleet and budget recently. |
+| `hooks/secret_read_guard.sh` | PreToolUse (Bash) | See above. |
+
+Registration is per `CLAUDE_CODE_SESSION_ID` and does not survive a session or
+account switch. A project that forks the stop hook keeps a separate
+registration; `aimail session` reports both, because an unregistered session is a
+silent pass-through that looks identical to a healthy one.
+
+Kill switches exist for a human to use, not for a seat to use around a refusal:
+
+| Variable | Disables |
+|---|---|
+| `AIMAIL_PROMPT_CAPTURE=0` | recording prompts in the ledger |
+| `AIMAIL_PROMPT_GATE=0` | the triage gate on Stop |
+| `AIMAIL_WORK_MAIL_GUARD=0` | the work-mail-cites-an-ask check |
+| `AIMAIL_SEND_GREEN_GUARD=0` | the GREEN evidence-line check |
+| `AIMAIL_SEND_IDENTITY_CHECK=0` | the sender-is-the-calling-seat check |
+| `AIMAIL_LANDING_GUARD_REQUIRE_FF=0` | the fast-forward-only rule in the landing hook |
+
+---
+
+## Configuration
+
+`etc/aimail.conf.example` documents every setting; the common ones:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AIMAIL_ROOT` | `~/.aimail` | where mail and state live (outside the repo) |
+| `AIMAIL_POLL_INTERVAL` | 5 | seconds between polls; an idle poll costs a `find` and a sleep |
+| `POLLER_DRAIN_MAXB` | 60000 | delivery size cap in bytes |
+| `AIMAIL_REARM_GRACE` | 180 | seconds a fired poller may take to re-arm |
+| `AIMAIL_STALL_ALERT` | 1200 | seconds before a seat reads STALLED |
+| `AIMAIL_ASK_STALE` | 1800 | seconds before an untouched ask row is stale |
+| `AIMAIL_CAP_DEFAULT` | 90 | session cap percentage; `AIMAIL_CAP_<account>` overrides |
+| `AIMAIL_ACCOUNT_POOL` | unset | the accounts the fleet manages, by name. Set it. |
+| `AIMAIL_STERILITY_TERMS` | unset | `|`-separated terms that must not appear in tracked files; unset means the check is a no-op |
+| `AIMAIL_LANDING_GUARD_REPOS` / `_ALLOW` | see example | repos the landing guard covers, and extra landers per ref |
+
+`aimail migrate <old-mailbox> [--dry-run]` imports an existing mailbox. It copies,
+never moves, is idempotent and resumable, and keeps the chronology.
+
+---
+
+## Tests
+
+```bash
+bash tests/run.sh                    # the whole suite; run it in the background, it is long
+bash tests/drop_guards.sh            # one file
+bash hooks/stop_guard.sh selftest    # also run by the suite
+```
+
+Every guard is exercised with an input that must trip it, paired with a positive
+control on the nearest valid input so an always-refusing guard cannot hide. When
+you check a guard by mutating it, assert that the patch actually applied before
+drawing a conclusion: a decoy that cannot apply its patch proves nothing.
+
+[docs/PORTING.md](docs/PORTING.md) maps known defects of the system this one
+replaced to prevented, partial or not-yet-ported.
+
+---
+
+## Known limits
+
+- **A clean exit can report `CRASHED`.** That verdict means "no exit record, a
+  human must intervene", so a false positive pages someone for nothing. The cause
+  is not settled, and the heartbeat file overwrites its own evidence on the next
+  poll, so any fix must start by capturing what the check actually saw.
+- **A stop instruction that ends with "stop" leaves a seat unreachable.** The
+  poller exits on delivery; a seat that stops without re-arming has no reader and
+  nothing can wake it. Any stop procedure must end with re-arm, then stop.
+- **An active seat with no reader accepts mail silently.** `send` warns when a
+  recipient has no poller heartbeat, but the registry state is still legal. Retire
+  the seat or start a reader.
+- **Command-name guards match spelling.** The secret-read hook and similar guards
+  stop accidents and first drafts, not a session determined to get around them. A
+  real boundary is an operating-system permission.
+
+**The standing caution:** for a fleet using it, `aimail` is the only channel
+between seats. A bad patch here does not raise a false alarm, it produces
+silence, and silence looks the same as everyone being busy. Change it in daylight,
+with someone watching, and never in the middle of an incident.
