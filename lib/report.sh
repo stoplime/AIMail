@@ -83,12 +83,19 @@ if not isinstance(rows, list):
     sys.exit(4)
 tot = 0.0
 for r in rows:
-    if isinstance(r, dict) and r.get("date") == day:
-        c = r.get("totalCost", r.get("costUSD"))
-        if not isinstance(c, (int, float)):
-            sys.exit(4)
-        tot += float(c)
-print("%.2f" % tot)
+    if not isinstance(r, dict):
+        continue
+    # the installed tool keys a row's date as "period"; older output used "date". Either may carry a
+    # longer ISO string, so only the first ten characters (the calendar date) are compared.
+    key = r.get("period") or r.get("date")
+    if not isinstance(key, str) or key[:10] != day:
+        continue
+    c = r.get("totalCost", r.get("costUSD"))
+    if not isinstance(c, (int, float)):
+        sys.exit(4)
+    tot += float(c)
+# no matching row, or nothing but zeros, is "no spend measured", never a measured $0.00
+print("%.2f" % tot if tot > 0 else "none")
 PY
 )"; rc=$?
   rm -f "$tmp"
@@ -159,13 +166,17 @@ budget_report() {
 
   local n_acct; n_acct="$(_report_accounts | wc -l | tr -d ' ')"
   local spend_line per_line
-  if (( rc == 0 )); then
+  if (( rc == 0 )) && [[ "$spend" == "none" ]]; then
+    spend_line="n/a (no spend measured for $day)"
+  elif (( rc == 0 )); then
     spend_line="\$$spend  (ccusage, $n_acct configured account(s))"
   else
     spend_line="UNMEASURABLE: ${spend_err:-ccusage gave no answer}"
   fi
   if (( rc != 0 )); then
     per_line="n/a (spend is unmeasurable)"
+  elif [[ "$spend" == "none" ]]; then
+    per_line="n/a (no spend measured)"
   elif (( closed == 0 )); then
     per_line="n/a (0 asks closed)"
   else

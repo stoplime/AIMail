@@ -54,7 +54,7 @@ run_zone() {
     ledger_row k0006 open ""                                  # still open
   } > "$AIMAIL_ROOT/state/asks.tsv"
   cat > "$T/daily.json" <<'EOJ'
-{"daily":[{"date":"2026-09-29","totalCost":99.5},{"date":"2026-09-30","totalCost":12.0},{"date":"2026-10-01","totalCost":77.0}],"totals":{"totalCost":188.5}}
+{"daily":[{"period":"2026-09-29","totalCost":99.5,"agent":"all"},{"period":"2026-09-30","totalCost":12.0,"agent":"all","inputTokens":10,"modelBreakdowns":[{"modelName":"m","cost":12.0}]},{"period":"2026-10-01","totalCost":77.0,"agent":"all"}],"totals":{"totalCost":188.5,"inputTokens":99}}
 EOJ
 
   local out rc
@@ -99,12 +99,33 @@ EOJ
   check "  and prints no zero cost-per-ask figure" "$(grep 'Cost per closed ask' <<<"$out" | grep -c '\$0\|0\.00')" 0
   check "  the spend is still shown" "$(grep -c 'Spend, all configured accounts: *\$5.00' <<<"$out")" 1
 
-  # ccusage knows nothing for the date but answers: a real zero spend, closed 0
+  # no row for the date: not a measured zero
+  cat > "$T/daily.json" <<'EOJ'
+{"daily":[{"period":"2026-09-01","totalCost":4.0}]}
+EOJ
+  out="$("$AIMAIL" budget report --date 2026-09-24 2>&1)"; rc=$?
+  check "no row for the date: spend prints n/a, exit 0" "$(grep -c 'Spend, all configured accounts: *n/a (no spend measured' <<<"$out")$rc" 10
+  check "  never \$0.00 anywhere in the report" "$(grep -c '\$0\.00' <<<"$out")" 0
+  check "  cost per closed ask is n/a, no division" "$(grep -c 'Cost per closed ask: *n/a (no spend measured)' <<<"$out")" 1
   cat > "$T/daily.json" <<'EOJ'
 {"daily":[]}
 EOJ
   out="$("$AIMAIL" budget report --date 2026-09-24 2>&1)"
-  check "an empty but valid ccusage answer is a measured \$0.00 spend" "$(grep -c 'Spend, all configured accounts: *\$0.00' <<<"$out")" 1
+  check "an empty but valid ccusage answer is n/a, not \$0.00" "$(grep -c 'Spend, all configured accounts: *n/a' <<<"$out")" 1
+  # all-zero rows for the date
+  cat > "$T/daily.json" <<'EOJ'
+{"daily":[{"period":"2026-09-30","totalCost":0,"agent":"all"},{"period":"2026-09-30","totalCost":0.0}]}
+EOJ
+  out="$("$AIMAIL" budget report --date 2026-09-30 2>&1)"
+  check "rows that are all zero: spend n/a, not \$0.00" "$(grep -c 'Spend, all configured accounts: *n/a' <<<"$out")$(grep -c '\$0\.00' <<<"$out")" 10
+  check "  cost per closed ask n/a even with asks closed that day" "$(grep -c 'Cost per closed ask: *n/a (no spend measured)' <<<"$out")" 1
+  # both keys present: either one matches, and a row is counted once; a longer ISO string matches on its first ten characters
+  cat > "$T/daily.json" <<'EOJ'
+{"daily":[{"period":"2026-09-30","date":"2026-09-30","totalCost":3.0},{"date":"2026-09-30T00:00:00.000Z","totalCost":1.5},{"period":"2026-09-30T12:00:00Z","totalCost":0.5},{"period":"2026-09-29","date":"2026-09-30","totalCost":50}]}
+EOJ
+  out="$("$AIMAIL" budget report --date 2026-09-30 2>&1)"
+  check "period wins over date; old date-only rows and longer ISO strings match (3.0+1.5+0.5)" "$(grep -c 'Spend, all configured accounts: *\$5.00' <<<"$out")" 1
+  check "  cost per closed ask is spend / closed (5.00 / 2)" "$(grep -c 'Cost per closed ask: *\$2.50' <<<"$out")" 1
 
   # ccusage failure -> unmeasurable, exit 4, never a zero
   touch "$T/cc_fail"
