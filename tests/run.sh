@@ -3962,6 +3962,37 @@ else
   printf '  ✖ got: %s\n' "$OUT"
 fi
 
+# ARM 7: mail that is not a wake reason must not raise the streak: a held --no-wake notice, and mail
+# held for a parked seat. A normal waking mail (ARM 2 above) still does.
+_wd_reset() { rm -f "$AIMAIL_ROOT/mail/wdseat"/*.md "$AIMAIL_ROOT/mail/wdsupervisor"/*.md "$AIMAIL_ROOT"/state/watchdog_blocked_streak_wdseat \
+                    "$AIMAIL_ROOT"/state/watchdog_alerted/wdseat "$AIMAIL_ROOT/state/seat_park_wdseat"; _wd_set_state blocked; }
+_wd_reset
+"$AIMAIL" send --to wdseat --from wdsupervisor --subject "held notice" --body-file "$AIMAIL_ROOT/wd_body.md" --no-wake >/dev/null 2>&1
+_wd_run >/dev/null 2>&1; _wd_run >/dev/null 2>&1; _wd_run >/dev/null 2>&1
+if [[ ! -f "$AIMAIL_ROOT/state/watchdog_blocked_streak_wdseat" ]] && (( $(_wd_inbox_count) == 0 )); then
+  PASS=$((PASS+1)); printf '  ✔ a held --no-wake notice does not raise the blocked-with-mail streak or alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("watchdog: a held --no-wake notice counted as pending mail")
+fi
+_wd_reset
+AIMAIL_NOW=1800000000 "$AIMAIL" seat park wdseat --trigger "fixture event" --reason "fixture" >/dev/null 2>&1
+"$AIMAIL" send --to wdseat --from wdsupervisor --subject "held for the park" --body-file "$AIMAIL_ROOT/wd_body.md" >/dev/null 2>&1
+AIMAIL_NOW=1800000100 _wd_run >/dev/null 2>&1; AIMAIL_NOW=1800000200 _wd_run >/dev/null 2>&1; AIMAIL_NOW=1800000300 _wd_run >/dev/null 2>&1
+if [[ ! -f "$AIMAIL_ROOT/state/watchdog_blocked_streak_wdseat" ]] && (( $(_wd_inbox_count) == 0 )); then
+  PASS=$((PASS+1)); printf '  ✔ ordinary mail held for a parked seat does not raise the streak or alert\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("watchdog: mail held for a parked seat counted as pending mail")
+fi
+_wd_reset
+"$AIMAIL" send --to wdseat --from wdsupervisor --subject "normal waking mail" --body-file "$AIMAIL_ROOT/wd_body.md" >/dev/null 2>&1
+_wd_run >/dev/null 2>&1
+if [[ "$(cat "$AIMAIL_ROOT/state/watchdog_blocked_streak_wdseat" 2>/dev/null)" == "1" ]]; then
+  PASS=$((PASS+1)); printf '  ✔ a normal waking mail still raises the streak\n'
+else
+  FAIL=$((FAIL+1)); FAILURES+=("watchdog: a normal waking mail no longer raises the streak")
+fi
+_wd_reset
+
 rm -f "$AIMAIL_ROOT/mail/wdseat"/*.md "$AIMAIL_ROOT/mail/wdsupervisor"/*.md \
       "$AIMAIL_ROOT"/state/watchdog_blocked_streak_wdseat "$AIMAIL_ROOT"/state/watchdog_alerted/wdseat \
       "$AIMAIL_ROOT/state/stopguard/session.$WD_SID"

@@ -197,5 +197,15 @@ NOW=$(( NOW + 1*H ))
 OUT="$(AIMAIL_NOW="$NOW" "$AIMAIL" budget pool 2>/dev/null)"
 check "a park under the guard length reads GUARD yes (an un-park now would be refused)" "$(row alpha | awk '{print $3 "|" $4 "|" $6}')" "yes|1h00m|yes"
 
+section "a parked seat's poller is not woken by the heartbeat; an unparked one is"
+fresh gamma
+OUT="$(timeout 5 env AIMAIL_NOW="$NOW" AIMAIL_POLL_HEARTBEAT_SEC=1 "$AIMAIL" poll gamma 2>&1)"
+check "contrast: an unparked seat gets a heartbeat wake" "$(grep -c '^WAKE=heartbeat' <<<"$OUT")" 1
+am seat park gamma --trigger "event" --reason "heartbeat check" >/dev/null
+OUT="$(timeout 5 env AIMAIL_NOW="$NOW" AIMAIL_POLL_HEARTBEAT_SEC=1 "$AIMAIL" poll gamma 2>&1)"; RC=$?
+check "a parked seat's poller stays armed through the heartbeat window (killed by the timeout)" "$RC" 124
+check "  ...and prints no heartbeat wake" "$(grep -c '^WAKE=' <<<"$OUT")" 0
+rm -f "$STATE/seat_park_gamma"
+
 echo; printf 'park: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]]

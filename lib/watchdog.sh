@@ -142,15 +142,16 @@ for d in data:
 #   pending mail sitting for this seat, sustained over the streak window --
 #   reproducing the incident's own signature directly, not a proxy for it.
 
-# _watchdog_seat_has_pending_mail <seat> — true (exit 0) iff the seat's own
-# mailbox shows any file in its top-level inbox (never yet delivered) or its
-# `unacked/` folder (delivered, not yet acted on) — the exact two columns
-# `aimail fleet`/`aimail status` already compute (same `find -maxdepth 1`
-# idiom, reused rather than re-derived a third way).
+# _watchdog_seat_has_pending_mail <seat> — true (exit 0) iff the seat has mail
+# that is a real reason to be awake: a top-level inbox message that would wake
+# it (mail_pending_wake_count: a --no-wake notice, and any mail held for a
+# parked seat, are not counted), or anything in its `unacked/` folder
+# (delivered, not yet acted on). A held notice is waiting by design, so it must
+# never read as "blocked with pending mail".
 _watchdog_seat_has_pending_mail() {
   local seat="${1:?usage: _watchdog_seat_has_pending_mail <seat>}"
   local q u
-  q="$(find "$MAIL_DIR/$seat" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
+  q="$(mail_pending_wake_count "$seat")"
   u="$(find "$MAIL_DIR/$seat/unacked" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)"
   (( q > 0 || u > 0 ))
 }
