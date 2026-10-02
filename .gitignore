@@ -31,3 +31,5 @@ docs/bp*_*.md
 # Local-only tracking, no remote — see zignore/README.md. A standalone git
 # repo of its own; this line just keeps the OUTER repo blind to it entirely.
 zignore/
+__pycache__/
+*.pyc

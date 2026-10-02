@@ -1,0 +1,40 @@
+{
+  "_comment": "The ONE table for the Codex account. Tiers are the fleet's model tiers; Terra is deliberately unused.",
+  "tier_models": {
+    "haiku": "gpt-6-luna",
+    "sonnet": "gpt-6.1-sol",
+    "opus": "gpt-6.1-sol",
+    "fable": "gpt-6-astra"
+  },
+  "disabled_features": [
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "in_app_browser"
+  ],
+  "env_exclude": [
+    "*KEY*",
+    "*SECRET*",
+    "*TOKEN*",
+    "*PASSWORD*",
+    "*PASSWD*",
+    "*CREDENTIAL*",
+    "*AUTH*",
+    "GITHUB_PAT*",
+    "*_PAT",
+    "*PAT_*"
+  ],
+  "weekly_stop_percent": 95,
+  "reading_stale_seconds": 21600,
+  "turn_timeout_seconds": 3600,
+  "max_attempts": 3,
+  "extra_overrides": [
+    "sandbox_workspace_write.network_access=false",
+    "approval_policy=\"never\""
+  ],
+  "failure_backoff_seconds": 60,
+  "capped_backoff_seconds": 300,
+  "heartbeat_seconds": 15,
+  "max_reply_depth": 2
+}

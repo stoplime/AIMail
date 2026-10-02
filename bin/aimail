@@ -29,6 +29,12 @@ usage() {
   cat <<'EOF'
 aimail — fleet mail with a registered address space.
 
+CODEX ACCOUNT (a fourth account; seats hosted there are fed their mail by a worker)
+  aimail codex usage                        weekly reading from the Codex session files (also in `budget pool`)
+  aimail codex models                       the tier -> Codex model table (etc/codex_account.json)
+  aimail codex seat-add <seat> --tier T --worktree DIR   host a seat on the Codex account
+  aimail codex worker <seat> [--once]       the seat's mail loop: one Codex turn per mail batch
+
 SEATS (the address space — a name is only an address if it is registered)
   aimail seat list                          every registered seat
   aimail seat add <name> [desc] [aliases]   register one
@@ -536,6 +542,9 @@ case "$cmd" in
                claim_clear_blocked "$1" "$2" ;;
       *) claims_report "$@" ;;
     esac ;;
+
+  codex)
+    exec python3 "$_SELF/../lib/codex_account.py" "$@" ;;
 
   budget)
     source "$_SELF/../lib/budget.sh"

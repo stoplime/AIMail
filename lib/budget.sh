@@ -956,6 +956,11 @@ budget_pool() {
   info "LEFT is the time left in the account's own 5-hour block (XhYYm) and BLOCK-RESET its local reset"
   info "time (HH:MM); '?' for both means the block is unmeasured or already past (no fresh cached block)."
   _pool_seat_section "$pool_now" seats_by_acct
+  # The Codex account is read from its own session files, not the Claude usage endpoint; a failure
+  # here must never take the Claude table down with it.
+  echo
+  python3 "$(dirname "${BASH_SOURCE[0]}")/codex_account.py" pool-section 2>/dev/null \
+    || info "codex account: reading unavailable (aimail codex usage for the reason)"
 }
 
 # _pool_seat_section <now> <seats-by-account array name> — one row per registered seat, after the account
