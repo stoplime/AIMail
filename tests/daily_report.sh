@@ -64,10 +64,24 @@ EOJ
   check "  asks closed counts the two done rows on the date (edges inclusive of the last second, exclusive of next midnight)" "$(grep -c 'Asks closed that day: *2 ' <<<"$out")" 1
   check "  the withdrawn row is shown but not counted" "$(grep -c 'withdrawn that day: 1, not counted' <<<"$out")" 1
   check "  cost per closed ask is spend / closed" "$(grep -c 'Cost per closed ask: *\$6.00' <<<"$out")" 1
-  check "  review rounds line is present and n/a until recorded" "$(grep -c 'Review rounds per approved branch: *n/a' <<<"$out")" 1
+  check "  review rounds line is n/a when no round file exists" "$(grep -c 'Review rounds per approved branch: *n/a (no branch approved that day)' <<<"$out")" 1
   check "  the report fits one screen (24 lines)" "$([[ "$(wc -l <<<"$out")" -le 24 ]] && echo ok || echo long)" ok
   check "ccusage got 'daily --json' for exactly that date" "$(grep -c '^ARGS: daily --json --since 20260930 --until 20260930$' "$T/cc.log")" 1
   check "  with BOTH account directories comma-joined, once" "$(grep -c "^DIRS: $T/cfg/alpha,$T/cfg/beta$" "$T/cc.log")" 1
+
+  # fixture rounds (epoch, time, repo, branch, sha, round, verdict, scope, detail, reviewer, tests, findings)
+  rr() { printf '%s\t-\tdemo\t%s\tsha%s\t%s\t%s\tfirst\t-\trev\t-\t-\n' "$(ep "$1" "$2")" "$3" "$3$4" "$4" "$5"; }
+  { rr 2026-09-30 09:00:00 alpha 1 rejected; rr 2026-09-30 10:00:00 alpha 2 rejected; rr 2026-09-30 11:00:00 alpha 3 approved
+    rr 2026-09-30 23:59:59 beta 1 approved                       # last second of the date
+    rr 2026-09-30 12:00:00 gamma 1 rejected                      # rejected only: not an approved branch
+    rr 2026-09-29 23:59:59 delta 5 approved                      # the day before
+    rr 2026-10-01 00:00:00 eps 7 approved                        # the day after
+  } > "$AIMAIL_ROOT/state/review_rounds.tsv"
+  out="$("$AIMAIL" budget report --date 2026-09-30 2>&1)"
+  check "  rounds per approved branch: two approved that day (3 and 1 rounds), edges respected" "$(grep -c 'Review rounds per approved branch: *2.00 average over 2 approved branch(es), max 3' <<<"$out")" 1
+  out="$("$AIMAIL" budget report --date 2026-09-22 2>&1)"
+  check "  a day with no approval reads n/a, not 0" "$(grep -c 'Review rounds per approved branch: *n/a (no branch approved that day)' <<<"$out")" 1
+  rm -f "$AIMAIL_ROOT/state/review_rounds.tsv"
 
   # the default date is today's LOCAL date, from the fixed clock (00:30 local is the previous day in UTC for far-east zones)
   out="$(AIMAIL_NOW="$(ep 2026-09-30 00:30:00)" "$AIMAIL" budget report 2>&1)"

@@ -348,10 +348,10 @@ time. Asking for the status of a branch always answers for the branch's **curren
 makes an older approval stale without anyone having to say so. Nothing here reads message text.
 
 ```
-aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]...
+aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]... [--delta | --major "<why>"]
 aimail review check <sha>                       # runs the configured checker, prints pass or fail
-aimail review approve <sha> --by <seat>
-aimail review reject  <sha> --by <seat> --reason "..."
+aimail review approve <sha> --by <seat> [--tests <summary-file>] [--delta | --major "<why>"]
+aimail review reject  <sha> --by <seat> --reason "..." (--finding "<item>"... | --findings-file <file>) [--tests <summary-file>] [--delta | --major "<why>"]
 aimail review status <repo> <branch> | --sha <full-sha> [--quiet]   # approved | stale | in review | rejected | none
 aimail review list                              # every open review with its age
 aimail review handoff <repo> <branch>           # the only way to hand over a branch for pushing
@@ -364,6 +364,17 @@ aimail review handoff <repo> <branch>           # the only way to hand over a br
   that moment**, so editing the checker later cannot change what an approval vouched for.
 - **`approve`** needs a passing check on a record that has not changed since, and must come from the
   record's reviewer. **`reject`** records a reason.
+- **Rounds.** A round is one verdict, and every round is appended to `state/review_rounds.tsv` (sha, verdict,
+  scope, reviewer, test summary, findings; append-only). The **first** verdict on a branch must cite
+  `--tests <file>`, a readable test-run summary that contains the exact full 40-character sha; it is refused
+  when the option is missing, the file is unreadable or empty of that sha. A **reject** must carry at least one
+  non-empty finding (`--finding "<item>"`, repeatable, or `--findings-file`, one item per line, `#` lines
+  ignored). Any **later** review of the same branch (a second `start` after a verdict, a `start` at a moved-on
+  tip of an already-started branch, or any verdict after the first) must declare its scope: `--delta` (only the
+  diff since the last reviewed sha, which is recorded as the scope's base) or `--major "<why>"` (a full new
+  look, with the reason). A scope given at `start` covers that commit's verdict. Re-opening an unfinished review
+  of the very same commit is not a later review. `status` prints the round count and each round's sha,
+  verdict and scope, and `aimail budget report` averages the rounds of the branches approved that day.
 - **`--by` is tied to the session.** `start` refuses a session registered to a different seat, and `approve`
   and `reject` also refuse a session that is not registered to any seat (`status` and `list` work anywhere).
   Without this tie an author could simply type someone else's name.

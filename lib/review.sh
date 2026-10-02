@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # lib/review.sh — `aimail review`: "approved" is a recorded state, not a mail.
 #
-#   aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]...
+#   aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]... [--delta | --major "<why>"]
 #   aimail review check <sha>
-#   aimail review approve <sha> --by <seat>
-#   aimail review reject <sha> --by <seat> --reason "..."
+#   aimail review approve <sha> --by <seat> [--tests <summary-file>] [--delta | --major "<why>"]
+#   aimail review reject <sha> --by <seat> --reason "..." (--finding "<item>"... | --findings-file <file>)
+#                        [--tests <summary-file>] [--delta | --major "<why>"]
 #   aimail review status [<repo> <branch>] [--sha <sha>] [--quiet]
 #   aimail review list
 #   aimail review handoff <repo> <branch>
@@ -44,6 +45,17 @@ REVIEW_DIR() { echo "$STATE_DIR/reviews"; }
 REVIEW_LEDGER() { echo "$STATE_DIR/review_approvals.tsv"; }
 REVIEW_OVERRIDES() { echo "$STATE_DIR/review_overrides.log"; }
 REVIEW_HANDOFFS() { echo "$STATE_DIR/review_handoffs.log"; }
+REVIEW_ROUNDS() { echo "$STATE_DIR/review_rounds.tsv"; }
+
+# ═══ ROUNDS ═══════════════════════════════════════════════════════════════════
+# A ROUND is one verdict (approve or reject) on a branch. Each round appends one row to review_rounds.tsv
+# (append-only; nothing rewrites it): epoch, time, repo, branch, sha, round number, verdict, scope,
+# scope detail, reviewer, test summary path, findings (joined with " | ").
+#   - The FIRST verdict on a branch must cite a test-run summary file that names the exact full sha
+#     (`--tests <file>`), and a reject must carry findings (`--finding` / `--findings-file`).
+#   - Every LATER review of the same branch (a `start`, or a verdict) must declare its scope: `--delta`
+#     (the diff since the last reviewed sha, which is recorded as the scope's base) or `--major "<why>"`.
+#     Re-opening an unfinished review of the very same commit is not a later review.
 
 _rv_var() {   # _rv_var <name-of-setting> <repo>  -> the value of AIMAIL_REVIEW_<SETTING>_<repo>
   local n="AIMAIL_REVIEW_${1}_${2//-/_}"; printf '%s' "${!n:-}"
@@ -112,6 +124,74 @@ _rv_ledger_add() {   # time sha repo branch reviewer result checker-version note
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "$(REVIEW_LEDGER)"
 }
 
+# ─── rounds: reading and writing review_rounds.tsv ─────────────────────────────────────────────────
+_rv_rounds_of() {   # <repo> <branch> -> that branch's round rows, oldest first
+  [[ -f "$(REVIEW_ROUNDS)" ]] || return 0
+  awk -F'\t' -v r="$1" -v b="$2" '$3==r && $4==b' "$(REVIEW_ROUNDS)"
+}
+_rv_round_count() { _rv_rounds_of "$1" "$2" | awk 'END{print NR+0}'; }
+_rv_last_round_sha() { _rv_rounds_of "$1" "$2" | awk -F'\t' 'END{print $5}'; }
+
+# _rv_other_started_sha <repo> <branch> <sha> -> the most recently started review of this branch at a
+# DIFFERENT sha (a branch that moved on before any verdict), or nothing.
+_rv_other_started_sha() {
+  local f s best="" best_e=-1 e
+  for f in "$(REVIEW_DIR)"/*.env; do [[ -f "$f" ]] || continue; s="$(basename "$f" .env)"
+    [[ "$s" != "$3" && "$(_rv_get "$s" repo)" == "$1" && "$(_rv_get "$s" branch)" == "$2" ]] || continue
+    e="$(_rv_get "$s" started_epoch)"; [[ "$e" =~ ^[0-9]+$ ]] || e=0
+    (( e > best_e )) && { best_e=$e; best="$s"; }
+  done
+  printf '%s' "$best"
+}
+
+# _rv_parse_scope: the --delta / --major handling shared by start and the verdicts. A caller's option
+# loop hands each argument to it; it sets SC_KIND (delta|major|"") and SC_DETAIL. Returns the number of
+# arguments it consumed (0 when the argument is not a scope option).
+SC_KIND=""; SC_DETAIL=""
+SC_N=0
+_rv_scope_arg() {   # <arg> [next]: sets SC_N to the number of arguments consumed (0 = not a scope option)
+  SC_N=0
+  case "$1" in
+    --delta) [[ "$SC_KIND" == "major" ]] && refused "give --delta or --major \"<why>\", not both"; SC_KIND=delta; SC_N=1 ;;
+    --major) [[ "$SC_KIND" == "delta" ]] && refused "give --delta or --major \"<why>\", not both"
+             [[ -n "${2:-}" && -n "${2// /}" && "${2:0:2}" != "--" ]] || refused "--major needs the reason: --major \"<why this is a new look, not a delta>\""
+             SC_KIND=major; SC_DETAIL="${2//$'\t'/ }"; SC_N=2 ;;
+    *) ;;
+  esac
+}
+
+_rv_scope_refusal() {   # <what> -> the one message for a later review with no declared scope
+  refused "$1 is a LATER review of this branch and must declare its scope" \
+    "  --delta            review only the diff since the last reviewed sha (recorded as the scope's base)" \
+    "  --major \"<why>\"   a full new review, with the reason" \
+    "Rounds so far: see  aimail review status <repo> <branch>"
+}
+
+# _rv_check_tests <file> <full-sha>: the test-run summary must be readable and name the exact sha.
+_rv_check_tests() {
+  local f="$1" sha="$2"
+  [[ -n "$f" ]] || refused "the first verdict on a branch must cite a full test-run summary for the exact commit: --tests <summary-file>" \
+    "A verdict without evidence that the tests ran on $sha is not recorded."
+  [[ -f "$f" && -r "$f" ]] || refused "the test summary '$f' is missing or unreadable" "--tests must name a readable file."
+  grep -qF -- "$sha" "$f" 2>/dev/null || refused "the test summary '$f' does not mention the exact sha $sha" \
+    "It must be the summary of a run on this commit, not another one (the full 40-character sha must appear in it)."
+}
+
+_rv_round_add() {   # <repo> <branch> <sha> <verdict> <reviewer> <scope> <scope-detail> <tests> <findings>
+  local n; n=$(( $(_rv_round_count "$1" "$2") + 1 ))
+  mkdir -p "$STATE_DIR"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(now_epoch)" "$(_rv_now)" "$1" "$2" "$3" "$n" "$4" "$6" "${7:--}" "$5" "${8:--}" "${9:--}" >> "$(REVIEW_ROUNDS)"
+  echo "$n"
+}
+
+# _rv_rounds_print <repo> <branch>: the round count and each round's sha and verdict.
+_rv_rounds_print() {
+  local rows n; rows="$(_rv_rounds_of "$1" "$2")"; n="$(printf '%s' "$rows" | awk 'NF{c++} END{print c+0}')"
+  info "rounds: $n"
+  (( n )) || return 0
+  printf '%s\n' "$rows" | awk -F'\t' '{printf "  round %s  %s  %-8s  scope %s%s  by %s\n", $6, substr($5,1,12), $7, $8, ($9!="-" ? " (" ($8=="delta" ? "since " substr($9,1,12) : $9) ")" : ""), $10}'
+}
+
 _rv_authors() {   # _rv_authors <repo-path> <base> <sha> -> one lowercase name per line
   {
     git -C "$1" log --format='%an' "$2..$3" 2>/dev/null
@@ -124,8 +204,9 @@ _rv_sha256() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 review_start() {
   local repo="${1:-}" branch="${2:-}"; shift 2 2>/dev/null || true
   [[ -n "$repo" && -n "$branch" ]] || refused "usage: aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]..."
-  local by="" base="" extra=()
+  local by="" base="" extra=() SC_KIND=""; SC_DETAIL=""
   while (( $# )); do
+    _rv_scope_arg "$1" "${2:-}"; if (( SC_N )); then shift "$SC_N"; continue; fi
     case "$1" in
       --by) by="${2:-}"; shift 2 ;;
       --base) base="${2:-}"; shift 2 ;;
@@ -155,6 +236,16 @@ review_start() {
     local prev; prev="$(_rv_get "$sha" reviewer)"
     [[ "${prev,,}" == "$lby" ]] || refused "a review of $sha is already open for $prev" "Reject or finish it first: aimail review status --sha $sha"
   fi
+  # A later review of the same branch must declare its scope. Later = the branch already has a verdict, or
+  # an earlier review of it was started at another commit. Re-opening an unfinished review of this very
+  # commit (no verdict anywhere on the branch) is not later.
+  local rounds_n delta_from=""; rounds_n="$(_rv_round_count "$repo" "$branch")"
+  if (( rounds_n > 0 )); then delta_from="$(_rv_last_round_sha "$repo" "$branch")"
+  else delta_from="$(_rv_other_started_sha "$repo" "$branch" "$sha")"; fi
+  if [[ -n "$delta_from" && -z "$SC_KIND" ]]; then _rv_scope_refusal "a review of $repo $branch at ${sha:0:12}"; fi
+  if [[ -z "$delta_from" && -n "$SC_KIND" ]]; then
+    info "note: no earlier review of $branch is on record, so --${SC_KIND} is recorded but not required."
+  fi
   if [[ ! -f "$rec" ]]; then
     local skel; skel="$($check "$sha" --repo "$path" --base "$base" --template 2>&1)" || die "the checker could not write a template: $skel"
     printf '%s\n' "$skel" \
@@ -164,7 +255,14 @@ review_start() {
   _rv_set "$sha" reviewer "$by"; _rv_set "$sha" authors "$(paste -sd, <<<"$authors")"
   _rv_set "$sha" started "$(_rv_now)"; _rv_set "$sha" started_epoch "$(now_epoch)"
   _rv_set "$sha" state "in review"
+  if [[ -n "$SC_KIND" ]]; then
+    _rv_set "$sha" scope "$SC_KIND"
+    if [[ "$SC_KIND" == "delta" ]]; then _rv_set "$sha" scope_detail "${delta_from:--}"; else _rv_set "$sha" scope_detail "$SC_DETAIL"; fi
+  fi
   ok "review open for $repo $branch at $sha (base $base)"
+  if [[ "$SC_KIND" == "delta" && -n "$delta_from" ]]; then
+    info "scope: delta since the last reviewed sha ${delta_from:0:12}: git -C $path diff ${delta_from:0:12}..${sha:0:12}"
+  elif [[ "$SC_KIND" == "major" ]]; then info "scope: major, reason: $SC_DETAIL"; fi
   info "record: $rec"
   info "authors found: ${authors:-（none）}"
   info "next: fill every section, then: aimail review check ${sha:0:12}"
@@ -186,9 +284,33 @@ review_check() {
   warn "check FAILED for $sha (exit $rc)"; return 1
 }
 
+# _rv_verdict_gate <repo> <branch> <sha> <tests-file> <noun>: the round rules for one verdict. Sets
+# RV_SCOPE (first|delta|major) and RV_SCOPE_DETAIL for the round row. Reads SC_KIND/SC_DETAIL (the
+# verdict command's own --delta/--major); a scope recorded at `review start` for this sha also counts.
+RV_SCOPE=""; RV_SCOPE_DETAIL=""
+_rv_verdict_gate() {
+  local repo="$1" branch="$2" sha="$3" tests="$4" noun="$5" n last
+  n="$(_rv_round_count "$repo" "$branch")"; last="$(_rv_last_round_sha "$repo" "$branch")"
+  if (( n == 0 )); then
+    _rv_check_tests "$tests" "$sha"
+    RV_SCOPE="first"; RV_SCOPE_DETAIL="-"
+    return 0
+  fi
+  [[ -z "$tests" ]] || _rv_check_tests "$tests" "$sha"      # optional after the first verdict, but never a wrong one
+  local kind="$SC_KIND" detail="$SC_DETAIL"
+  if [[ -z "$kind" ]]; then kind="$(_rv_get "$sha" scope)"; detail="$(_rv_get "$sha" scope_detail)"; fi
+  [[ -n "$kind" ]] || _rv_scope_refusal "the $noun of $repo $branch at ${sha:0:12}"
+  RV_SCOPE="$kind"
+  if [[ "$kind" == "delta" ]]; then RV_SCOPE_DETAIL="$last"; else RV_SCOPE_DETAIL="$detail"; fi
+}
+
 review_approve() {
   local sha; sha="$(_rv_resolve "${1:-}")" || exit $?; shift
-  local by=""; while (( $# )); do case "$1" in --by) by="${2:-}"; shift 2 ;; *) refused "unknown option for review approve: $1" ;; esac; done
+  local by="" tests="" SC_KIND=""; SC_DETAIL=""
+  while (( $# )); do
+    _rv_scope_arg "$1" "${2:-}"; if (( SC_N )); then shift "$SC_N"; continue; fi
+    case "$1" in --by) by="${2:-}"; shift 2 ;; --tests) tests="${2:-}"; shift 2 ;; *) refused "unknown option for review approve: $1" ;; esac
+  done
   [[ -n "$by" ]] || refused "--by <seat> is required"
   _rv_bound "$by" require
   local repo reviewer authors records rec; repo="$(_rv_get "$sha" repo)"; _rv_require_repo "$repo"
@@ -198,22 +320,46 @@ review_approve() {
   [[ -n "$(_rv_get "$sha" checked_at)" ]] || refused "run the check first: aimail review check ${sha:0:12}" "An approval without a passing check is not recorded."
   [[ "$(_rv_get "$sha" checked_rc)" == "0" ]] || refused "the last check of $sha failed" "Fix the record or the branch, then: aimail review check ${sha:0:12}"
   [[ "$(_rv_sha256 "$rec")" == "$(_rv_get "$sha" checked_record_sha256)" ]] || refused "the record changed after the last check" "Run: aimail review check ${sha:0:12}"
+  local branch; branch="$(_rv_get "$sha" branch)"
+  _rv_verdict_gate "$repo" "$branch" "$sha" "$tests" "approval"
   local ver; ver="$(_rv_get "$sha" checker_version)"     # the hash at CHECK time: the checker that actually ran
-  _rv_ledger_add "$(_rv_now)" "$sha" "$repo" "$(_rv_get "$sha" branch)" "$by" approved "$ver" "-"
+  local rn; rn="$(_rv_round_add "$repo" "$branch" "$sha" approved "$by" "${RV_SCOPE:-first}" "${RV_SCOPE_DETAIL:--}" "$tests" "-")"
+  _rv_ledger_add "$(_rv_now)" "$sha" "$repo" "$branch" "$by" approved "$ver" "-"
   _rv_set "$sha" state approved
-  ok "$sha approved by $by (checker $ver)"
+  ok "$sha approved by $by (checker $ver), round $rn of $repo $branch"
 }
 
 review_reject() {
   local sha; sha="$(_rv_resolve "${1:-}")" || exit $?; shift
-  local by="" why=""; while (( $# )); do case "$1" in --by) by="${2:-}"; shift 2 ;; --reason) why="${2:-}"; shift 2 ;; *) refused "unknown option for review reject: $1" ;; esac; done
-  [[ -n "$by" && -n "$why" ]] || refused "usage: aimail review reject <sha> --by <seat> --reason \"...\""
+  local by="" why="" tests="" ffile="" findings=() SC_KIND=""; SC_DETAIL=""
+  while (( $# )); do
+    _rv_scope_arg "$1" "${2:-}"; if (( SC_N )); then shift "$SC_N"; continue; fi
+    case "$1" in
+      --by) by="${2:-}"; shift 2 ;; --reason) why="${2:-}"; shift 2 ;; --tests) tests="${2:-}"; shift 2 ;;
+      --finding) findings+=("${2:-}"); shift 2 ;; --findings-file) ffile="${2:-}"; shift 2 ;;
+      *) refused "unknown option for review reject: $1" ;;
+    esac
+  done
+  [[ -n "$by" && -n "$why" ]] || refused "usage: aimail review reject <sha> --by <seat> --reason \"...\" (--finding \"<item>\"... | --findings-file <file>) [--tests <summary-file>] [--delta | --major \"<why>\"]"
   _rv_bound "$by" require
   local reviewer; reviewer="$(_rv_get "$sha" reviewer)"
   [[ "${by,,}" == "${reviewer,,}" ]] || refused "$by is not the reviewer of $sha (the reviewer is $reviewer)"
-  _rv_ledger_add "$(_rv_now)" "$sha" "$(_rv_get "$sha" repo)" "$(_rv_get "$sha" branch)" "$by" rejected "-" "${why//$'\t'/ }"
+  # a reject carries at least one non-empty finding: what must change
+  local items=() it
+  for it in "${findings[@]}"; do [[ -n "${it//[[:space:]]/}" ]] && items+=("${it//$'\t'/ }"); done
+  if [[ -n "$ffile" ]]; then
+    [[ -f "$ffile" && -r "$ffile" ]] || refused "the findings file '$ffile' is missing or unreadable"
+    while IFS= read -r it; do it="${it#"${it%%[![:space:]]*}"}"; [[ -n "$it" && "${it:0:1}" != "#" ]] && items+=("${it//$'\t'/ }"); done < "$ffile"
+  fi
+  (( ${#items[@]} )) || refused "a reject must carry a findings list of at least one item: --finding \"<what must change>\" (repeatable) or --findings-file <file>" \
+    "A rejection with no findings tells the author nothing to fix. (--reason is the one-line summary, not the list.)"
+  local repo branch; repo="$(_rv_get "$sha" repo)"; branch="$(_rv_get "$sha" branch)"
+  _rv_verdict_gate "$repo" "$branch" "$sha" "$tests" "rejection"
+  local joined; joined="$(printf '%s\n' "${items[@]}" | paste -sd'|' | sed 's/|/ | /g')"
+  local rn; rn="$(_rv_round_add "$repo" "$branch" "$sha" rejected "$by" "${RV_SCOPE:-first}" "${RV_SCOPE_DETAIL:--}" "$tests" "$joined")"
+  _rv_ledger_add "$(_rv_now)" "$sha" "$repo" "$branch" "$by" rejected "-" "${why//$'\t'/ }"
   _rv_set "$sha" state rejected
-  ok "$sha rejected by $by: $why"
+  ok "$sha rejected by $by: $why (round $rn of $repo $branch, ${#items[@]} finding(s))"
 }
 
 # status word for an exact sha: approved | rejected | in review | none
@@ -254,7 +400,11 @@ review_status() {
       fi
     fi
   fi
-  if (( quiet )); then echo "$word"; else info "$word${detail:+ ($detail)}  $sha"; fi
+  if (( quiet )); then echo "$word"; else
+    info "$word${detail:+ ($detail)}  $sha"
+    [[ -n "$repo" && -n "$branch" ]] || { repo="$(_rv_get "$sha" repo)"; branch="$(_rv_get "$sha" branch)"; }
+    [[ -n "$repo" && -n "$branch" ]] && _rv_rounds_print "$repo" "$branch"
+  fi
   [[ "$word" == "approved" ]]
 }
 

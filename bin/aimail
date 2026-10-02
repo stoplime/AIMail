@@ -201,16 +201,26 @@ FLEET — who is working, who is reachable, who needs a human
   Never applies to `--release`, `--list`, `--canon`.
 
 REVIEWING A BRANCH FOR A PULL REQUEST (lib/review.sh; repos and the checker come from etc/aimail.conf)
-  aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]…
+  aimail review start <repo> <branch> --by <seat> [--base <ref>] [--author <seat>]… [--delta | --major "<why>"]
                                              opens the record for the branch's current commit;
                                              refuses a seat that wrote any of it
   aimail review check <sha>                  runs the configured checker, prints pass/fail
-  aimail review approve <sha> --by <seat>    only after a passing check on the unchanged record,
-                                             by the record's reviewer, who is not an author
-  aimail review reject <sha> --by <seat> --reason "…"
+  aimail review approve <sha> --by <seat> [--tests <summary-file>] [--delta | --major "<why>"]
+                                             only after a passing check on the unchanged record,
+                                             by the record's reviewer, who is not an author. The FIRST
+                                             verdict on a branch needs --tests: a readable test-run
+                                             summary that names the exact full sha
+  aimail review reject <sha> --by <seat> --reason "…" (--finding "<item>"… | --findings-file <file>)
+                                             [--tests <summary-file>] [--delta | --major "<why>"]
+                                             a reject carries at least one non-empty finding
+                                             A LATER review of a branch (a second start, or a verdict
+                                             after the first) declares --delta (diff since the last
+                                             reviewed sha) or --major "<why>"
   aimail review status <repo> <branch> | --sha <full-sha> [--quiet]
                                              approved | stale | in review | rejected | none, for
-                                             the branch's CURRENT commit (exit 0 only if approved)
+                                             the branch's CURRENT commit (exit 0 only if approved);
+                                             also prints the round count and each round's sha, verdict
+                                             and scope
   aimail review list                         every open review with its age
   aimail review handoff <repo> <branch>      the only way to give the owner a push: refuses unless the
                                              current commit is approved; prints the push command and

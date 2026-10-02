@@ -68,11 +68,12 @@ check "check passes once the record is right"                  "$(rc "$AIMAIL" r
 check "approve by someone who is not the reviewer is refused"  "$(rc as rev2 "$AIMAIL" review approve "$SHA1" --by rev2)" 3
 check "approve by an author is refused"                        "$(rc as writer-seat "$AIMAIL" review approve "$SHA1" --by writer-seat)" 3
 echo "edited later" >> "$T/records/$SHA1.md"
-check "approve after the record changed is refused"            "$(rc as rev "$AIMAIL" review approve "$SHA1" --by rev)" 3
+check "approve after the record changed is refused"            "$(rc as rev "$AIMAIL" review approve "$SHA1" --by rev --tests "$T/tests1.txt")" 3
 check "check again passes"                                     "$(rc "$AIMAIL" review check "$SHA1")" 0
 check "status is not approved before the approval"             "$(rc "$AIMAIL" review status demo work)" 1
+printf 'full test run, all green, tip %s\n' "$SHA1" > "$T/tests1.txt"
 OLDV="$(sha256sum "$T/checker.sh" | cut -c1-12)"; echo "# edited after the check" >> "$T/checker.sh"
-check "approve by the reviewer after a passing check succeeds" "$(rc as rev "$AIMAIL" review approve "$SHA1" --by rev)" 0
+check "approve by the reviewer after a passing check succeeds" "$(rc as rev "$AIMAIL" review approve "$SHA1" --by rev --tests "$T/tests1.txt")" 0
 check "the approval row names sha, reviewer and the checker version from CHECK time" "$(awk -F'\t' -v s="$SHA1" -v v="$OLDV" '$2==s && $5=="rev" && $6=="approved" && $7==v {n++} END {print n+0}' "$AIMAIL_ROOT/state/review_approvals.tsv")" 1
 
 echo "the session tie"
@@ -97,12 +98,102 @@ check "status of a sha with no review is not approved"         "$(rc "$AIMAIL" r
 "${G[@]}" checkout -q work
 echo "reject and list"
 check "list shows nothing open once approved"                  "$("$AIMAIL" review list | grep -c "$SHA1" )" 0
-check "start on the new commit opens a review"                 "$(rc "$AIMAIL" review start demo work --by rev)" 0
+check "start on the new commit without a scope is refused (a later review)" "$(rc "$AIMAIL" review start demo work --by rev)" 3
+check "start on the new commit opens a review with --delta"    "$(rc "$AIMAIL" review start demo work --by rev --delta)" 0
 check "list shows the open review with its age"                "$("$AIMAIL" review list | grep -c "${SHA2:0:12}.*open")" 1
-check "reject needs a reason"                                  "$(rc as rev "$AIMAIL" review reject "$SHA2" --by rev)" 3
-check "reject by a non-reviewer is refused"                    "$(rc as rev2 "$AIMAIL" review reject "$SHA2" --by rev2 --reason x)" 3
-check "reject by the reviewer with a reason succeeds"          "$(rc as rev "$AIMAIL" review reject "$SHA2" --by rev --reason 'tests read source')" 0
+check "reject needs a reason"                                  "$(rc as rev "$AIMAIL" review reject "$SHA2" --by rev --finding f)" 3
+check "reject by a non-reviewer is refused"                    "$(rc as rev2 "$AIMAIL" review reject "$SHA2" --by rev2 --reason x --finding f)" 3
+check "reject by the reviewer with a reason and a finding succeeds" "$(rc as rev "$AIMAIL" review reject "$SHA2" --by rev --reason 'tests read source' --finding 'tests read the source text')" 0
 check "a rejected sha reads rejected"                          "$("$AIMAIL" review status --sha "$SHA2" --quiet)" rejected
+
+echo "rounds: the first verdict, findings, later reviews, status"
+# a fresh branch, so the earlier flow's records do not matter
+"${G[@]}" checkout -q -b rnd base; echo r1 > "$T/r/r1"; "${G[@]}" add -A
+git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "round one"; R1="$(git -C "$T/r" rev-parse HEAD)"
+printf 'run summary for %s: 42 passed\n' "$R1" > "$T/sum_r1.txt"
+printf 'run summary for %s: 42 passed\n' "$SHA1" > "$T/sum_other.txt"
+: > "$T/sum_empty.txt"; printf 'run summary for %s\n' "${R1:0:12}" > "$T/sum_short.txt"
+check "start on a branch never reviewed needs no scope"        "$(rc "$AIMAIL" review start demo rnd --by rev)" 0
+echo PASS-ME >> "$T/records/$R1.md"; "$AIMAIL" review check "$R1" >/dev/null
+check "first verdict without --tests is refused"               "$(rc as rev "$AIMAIL" review approve "$R1" --by rev)" 3
+check "  and says it must cite a test-run summary"             "$(saw 'must cite a full test-run summary')" 0
+check "first verdict with an unreadable summary is refused"    "$(rc as rev "$AIMAIL" review approve "$R1" --by rev --tests "$T/nope.txt")" 3
+check "  and says missing or unreadable"                       "$(saw 'missing or unreadable')" 0
+check "first verdict with a summary of another sha is refused" "$(rc as rev "$AIMAIL" review approve "$R1" --by rev --tests "$T/sum_other.txt")" 3
+check "  and says it does not mention the exact sha"           "$(saw 'does not mention the exact sha')" 0
+check "an empty summary is refused"                            "$(rc as rev "$AIMAIL" review approve "$R1" --by rev --tests "$T/sum_empty.txt")" 3
+check "a summary naming only a short sha is refused"           "$(rc as rev "$AIMAIL" review approve "$R1" --by rev --tests "$T/sum_short.txt")" 3
+check "a refused verdict records no round"                     "$(wc -l < "$AIMAIL_ROOT/state/review_rounds.tsv" 2>/dev/null | tr -d ' ' || echo 0)" 2
+check "reject without findings is refused"                     "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'bad' --tests "$T/sum_r1.txt")" 3
+check "  and says it needs at least one finding"               "$(saw 'findings list of at least one item')" 0
+check "reject with only a blank finding is refused"            "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'bad' --finding '   ' --tests "$T/sum_r1.txt")" 3
+printf '# comments and blank lines do not count\n\n   \n' > "$T/find_empty.txt"
+check "reject with a findings file of no items is refused"     "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'bad' --findings-file "$T/find_empty.txt" --tests "$T/sum_r1.txt")" 3
+check "reject with a missing findings file is refused"         "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'bad' --findings-file "$T/none.txt" --tests "$T/sum_r1.txt")" 3
+check "a reject as the first verdict still needs the summary"  "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'bad' --finding 'fix x')" 3
+printf 'fix the flaky test\n# note\nrename the helper\n' > "$T/find.txt"
+check "reject with a findings file and the summary succeeds"   "$(rc as rev "$AIMAIL" review reject "$R1" --by rev --reason 'two things' --findings-file "$T/find.txt" --tests "$T/sum_r1.txt")" 0
+check "  the round row names sha, verdict, scope first and both findings" "$(awk -F'\t' -v s="$R1" '$5==s && $6==1 && $7=="rejected" && $8=="first" && $12=="fix the flaky test | rename the helper" {n++} END{print n+0}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 1
+check "  the row records the summary path"                    "$(awk -F'\t' -v s="$R1" -v p="$T/sum_r1.txt" '$5==s && $11==p {n++} END{print n+0}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 1
+
+echo w > "$T/r/r2"; "${G[@]}" add -A
+git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "round two"; R2="$(git -C "$T/r" rev-parse HEAD)"
+check "a second review start without a scope is refused"       "$(rc "$AIMAIL" review start demo rnd --by rev)" 3
+check "  and names --delta and --major"                        "$(grep -c -- '--delta' "$T/err")$(grep -c -- '--major' "$T/err")" 11
+check "--major without a reason is refused"                    "$(rc "$AIMAIL" review start demo rnd --by rev --major)" 3
+check "--delta together with --major is refused"               "$(rc "$AIMAIL" review start demo rnd --by rev --delta --major why)" 3
+check "a refused start opens nothing"                          "$(test -e "$AIMAIL_ROOT/state/reviews/$R2.env"; echo $?)" 1
+check "a second start with --delta is allowed"                 "$(rc "$AIMAIL" review start demo rnd --by rev --delta)" 0
+check "  and names the diff base, the last reviewed sha"       "$(grep -c "${R1:0:12}\.\.${R2:0:12}" "$T/out")" 1
+echo PASS-ME >> "$T/records/$R2.md"; "$AIMAIL" review check "$R2" >/dev/null
+check "a later approve needs no test summary but may carry one" "$(rc as rev "$AIMAIL" review approve "$R2" --by rev --tests "$T/sum_other.txt")" 3
+check "  (a wrong summary is refused even after the first verdict)" "$(saw 'does not mention the exact sha')" 0
+check "a later verdict inherits the scope declared at start"    "$(rc as rev "$AIMAIL" review approve "$R2" --by rev)" 0
+check "  the round row says delta since the first sha"          "$(awk -F'\t' -v s="$R2" -v b="$R1" '$5==s && $6==2 && $7=="approved" && $8=="delta" && $9==b {n++} END{print n+0}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 1
+
+echo r3 > "$T/r/r3"; "${G[@]}" add -A
+git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "round three"; R3="$(git -C "$T/r" rev-parse HEAD)"
+check "a second start with --major records the reason"          "$(rc "$AIMAIL" review start demo rnd --by rev --major 'the design changed')" 0
+check "  the reason is stored on the review"                    "$(grep -c '^scope_detail=the design changed$' "$AIMAIL_ROOT/state/reviews/$R3.env")" 1
+echo PASS-ME >> "$T/records/$R3.md"; "$AIMAIL" review check "$R3" >/dev/null
+check "a later reject still needs findings"                     "$(rc as rev "$AIMAIL" review reject "$R3" --by rev --reason r)" 3
+check "a later reject with a finding is allowed"                "$(rc as rev "$AIMAIL" review reject "$R3" --by rev --reason r --finding 'x')" 0
+check "  the round row says major and the reason"               "$(awk -F'\t' -v s="$R3" '$5==s && $6==3 && $8=="major" && $9=="the design changed" {n++} END{print n+0}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 1
+
+# a verdict with no scope on a start that declared none: another branch where the branch moved on before any verdict
+"${G[@]}" checkout -q -b mv base; echo m1 > "$T/r/m1"; "${G[@]}" add -A
+git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "mv one"; M1="$(git -C "$T/r" rev-parse HEAD)"
+printf 'summary %s\n' "$M1" > "$T/sum_m1.txt"
+"$AIMAIL" review start demo mv --by rev >/dev/null 2>&1
+echo m2 > "$T/r/m2"; "${G[@]}" add -A; git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "mv two"; M2="$(git -C "$T/r" rev-parse HEAD)"
+check "a start at a moved-on tip of a branch already started needs a scope" "$(rc "$AIMAIL" review start demo mv --by rev)" 3
+check "  re-opening the very same unfinished review needs none"  "$(git -C "$T/r" checkout -q "$M1" 2>/dev/null; "${G[@]}" branch -f mv "$M1"; rc "$AIMAIL" review start demo mv --by rev)" 0
+"${G[@]}" checkout -q work
+
+# a verdict that declares no scope, on a review that declared none at start, after another round exists
+"${G[@]}" checkout -q -b vs base; echo v1 > "$T/r/v1"; "${G[@]}" add -A
+git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "vs one"; V1="$(git -C "$T/r" rev-parse HEAD)"
+"$AIMAIL" review start demo vs --by rev >/dev/null 2>&1; echo PASS-ME >> "$T/records/$V1.md"; "$AIMAIL" review check "$V1" >/dev/null
+echo v2 > "$T/r/v2"; "${G[@]}" add -A; git -C "$T/r" -c user.name=Writer-Seat -c user.email=w@w commit -q -m "vs two"; V2="$(git -C "$T/r" rev-parse HEAD)"
+"$AIMAIL" review start demo vs --by rev --delta >/dev/null 2>&1; printf 'summary %s\n' "$V2" > "$T/sum_v2.txt"
+as rev "$AIMAIL" review reject "$V2" --by rev --reason r --finding f --tests "$T/sum_v2.txt" >/dev/null 2>&1
+check "a later verdict with no scope (none at start either) is refused" "$(rc as rev "$AIMAIL" review approve "$V1" --by rev)" 3
+check "  and names --delta and --major"                          "$(grep -c -- '--delta' "$T/err")$(grep -c -- '--major' "$T/err")" 11
+check "the same verdict with --delta on the command is allowed"  "$(rc as rev "$AIMAIL" review approve "$V1" --by rev --delta)" 0
+check "  and the round row records delta since the previous round" "$(awk -F'\t' -v s="$V1" -v b="$V2" '$5==s && $6==2 && $8=="delta" && $9==b {n++} END{print n+0}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 1
+"${G[@]}" checkout -q work
+
+echo "rounds: status"
+OUT="$("$AIMAIL" review status demo rnd 2>&1)"
+check "status prints the round count"                           "$(grep -c '^rounds: 3$' <<<"$OUT")" 1
+check "  round 1: sha and verdict"                              "$(grep -c "round 1  ${R1:0:12}  rejected  scope first" <<<"$OUT")" 1
+check "  round 2: sha, verdict and delta base"                  "$(grep -c "round 2  ${R2:0:12}  approved  scope delta (since ${R1:0:12})" <<<"$OUT")" 1
+check "  round 3: sha, verdict and the major reason"            "$(grep -c "round 3  ${R3:0:12}  rejected  scope major (the design changed)" <<<"$OUT")" 1
+check "status --sha prints the rounds of that sha's branch"     "$("$AIMAIL" review status --sha "$R2" 2>&1 | grep -c '^rounds: 3$')" 1
+check "status --quiet still prints only the one word"           "$("$AIMAIL" review status demo rnd --quiet 2>&1)" rejected
+check "a branch with no round says rounds: 0"                   "$("$AIMAIL" review status demo mv 2>&1 | grep -c '^rounds: 0$')" 1
+check "the rounds file is append-only: that branch's rows are numbered 1 2 3 in file order" "$(awk -F'\t' '$4=="rnd"{printf "%s", $6}' "$AIMAIL_ROOT/state/review_rounds.tsv")" 123
+"${G[@]}" checkout -q work
 
 echo "the push gate"
 refs_for() { printf 'refs/heads/work %s refs/heads/work %s\n' "$1" "$(printf '0%.0s' {1..40})"; }

@@ -105,8 +105,15 @@ _report_closed_asks() {
 }
 
 # _report_review_rounds <start> <end> — the "review rounds per approved branch" value, or "n/a ...".
+# Rounds come from review_rounds.tsv (lib/review.sh): a branch approved in the window counts the rounds
+# (verdicts) it took, the approving one included. n/a when no branch was approved in the window.
 _report_review_rounds() {
-  echo "n/a (review rounds are not recorded yet)"
+  local f="$STATE_DIR/review_rounds.tsv"
+  [[ -f "$f" ]] || { echo "n/a (no branch approved that day)"; return 0; }
+  awk -F'\t' -v s="$1" -v e="$2" '
+    $7=="approved" && $1>=s && $1<e { n++; sum+=$6; if ($6>mx) mx=$6 }
+    END { if (n==0) print "n/a (no branch approved that day)";
+          else printf "%.2f average over %d approved branch(es), max %d\n", sum/n, n, mx }' "$f"
 }
 
 # budget_report [--date YYYY-MM-DD] [--mail]
